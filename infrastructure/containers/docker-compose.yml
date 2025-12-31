@@ -1,0 +1,175 @@
+version: '3.8'
+
+# Autonomous Flight Training Platform - Docker Compose Configuration
+#
+# Usage:
+#   Training with GPU:  docker-compose up training-gpu
+#   Training CPU only:  docker-compose up training-cpu
+#   TensorBoard:        docker-compose up tensorboard
+#   Full stack:         docker-compose up
+
+services:
+  # ===========================================================================
+  # GPU Training Service
+  # ===========================================================================
+  training-gpu:
+    build:
+      context: ../..
+      dockerfile: infrastructure/containers/Dockerfile
+      target: training
+    image: drone-accelerator:training-gpu
+    container_name: drone-training-gpu
+
+    # GPU support
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+    volumes:
+      # Mount source code for development
+      - ../..:/home/drone/app
+      # Persist trained models
+      - trained_models:/home/drone/app/trained_models
+      # TensorBoard logs
+      - tensorboard_logs:/home/drone/app/logs
+
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+      - CUDA_VISIBLE_DEVICES=0
+
+    # Override default command for interactive use
+    command: python quickstart_train.py --platform quadcopter_basic --mission hover_stability --timesteps 100000
+
+    # Keep container running for interactive use
+    stdin_open: true
+    tty: true
+
+  # ===========================================================================
+  # CPU Training Service
+  # ===========================================================================
+  training-cpu:
+    build:
+      context: ../..
+      dockerfile: infrastructure/containers/Dockerfile
+      target: training-cpu
+    image: drone-accelerator:training-cpu
+    container_name: drone-training-cpu
+
+    volumes:
+      - ../..:/home/drone/app
+      - trained_models:/home/drone/app/trained_models
+      - tensorboard_logs:/home/drone/app/logs
+
+    command: python quickstart_train.py --platform quadcopter_basic --mission hover_stability --timesteps 50000 --num-envs 2
+
+    stdin_open: true
+    tty: true
+
+  # ===========================================================================
+  # TensorBoard Service
+  # ===========================================================================
+  tensorboard:
+    image: tensorflow/tensorflow:latest
+    container_name: drone-tensorboard
+
+    ports:
+      - "6006:6006"
+
+    volumes:
+      - tensorboard_logs:/logs:ro
+
+    command: tensorboard --logdir=/logs --host=0.0.0.0 --port=6006
+
+    restart: unless-stopped
+
+  # ===========================================================================
+  # Inference/Evaluation Service
+  # ===========================================================================
+  inference:
+    build:
+      context: ../..
+      dockerfile: infrastructure/containers/Dockerfile
+      target: inference
+    image: drone-accelerator:inference
+    container_name: drone-inference
+
+    volumes:
+      - trained_models:/home/drone/app/trained_models:ro
+
+    command: python -c "print('Inference container ready. Mount your model and run evaluation.')"
+
+    stdin_open: true
+    tty: true
+
+  # ===========================================================================
+  # Jupyter Notebook for Development
+  # ===========================================================================
+  jupyter:
+    build:
+      context: ../..
+      dockerfile: infrastructure/containers/Dockerfile
+      target: training-cpu
+    image: drone-accelerator:jupyter
+    container_name: drone-jupyter
+
+    ports:
+      - "8888:8888"
+
+    volumes:
+      - ../..:/home/drone/app
+      - trained_models:/home/drone/app/trained_models
+
+    command: >
+      bash -c "pip install jupyterlab &&
+               jupyter lab --ip=0.0.0.0 --port=8888 --no-browser --allow-root
+               --NotebookApp.token='' --NotebookApp.password=''"
+
+    stdin_open: true
+    tty: true
+
+  # ===========================================================================
+  # ROS2 Deployment Service (for hardware testing)
+  # ===========================================================================
+  ros2-deploy:
+    build:
+      context: ../..
+      dockerfile: infrastructure/containers/Dockerfile
+      target: ros2-deployment
+    image: drone-accelerator:ros2
+    container_name: drone-ros2
+
+    # Network mode for ROS2 discovery
+    network_mode: host
+
+    volumes:
+      - trained_models:/ros2_ws/models:ro
+
+    environment:
+      - ROS_DOMAIN_ID=0
+      - RMW_IMPLEMENTATION=rmw_fastrtps_cpp
+
+    command: bash
+
+    stdin_open: true
+    tty: true
+
+# ===========================================================================
+# Named Volumes
+# ===========================================================================
+volumes:
+  trained_models:
+    name: drone-trained-models
+  tensorboard_logs:
+    name: drone-tensorboard-logs
+
+# ===========================================================================
+# Networks
+# ===========================================================================
+networks:
+  default:
+    name: drone-network
+    driver: bridge
