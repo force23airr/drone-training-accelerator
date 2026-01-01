@@ -9,7 +9,7 @@ Run: python quickstart_train.py
 import argparse
 from pathlib import Path
 
-from simulation.environments.environmental_simulator import EnvironmentalSimulator
+from simulation.environments import EnvironmentalSimulator
 from simulation.platforms.platform_configs import get_platform_config, list_platforms
 from training.suites.mission_suites import MissionSuite
 from training.parallel.parallel_trainer import ParallelTrainer

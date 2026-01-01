@@ -4,7 +4,7 @@ scipy>=1.7.0
 
 # Physics simulation
 pybullet>=3.2.5
-gym-pybullet-drones>=1.0.0  # NEW: Validated drone dynamics
+gym-pybullet-drones @ git+https://github.com/utiasDSL/gym-pybullet-drones.git  # Installed from GitHub
 
 # Reinforcement Learning
 gymnasium>=0.28.0
