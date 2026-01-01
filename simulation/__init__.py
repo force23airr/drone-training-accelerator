@@ -53,6 +53,27 @@ from simulation.control import (
     SimplePIDController,
 )
 
+# Domain randomization
+from simulation.randomization import (
+    DistributionType,
+    RandomizationRange,
+    PhysicsRandomizationConfig,
+    ActuatorRandomizationConfig,
+    SensorRandomizationConfig,
+    EnvironmentRandomizationConfig,
+    DomainRandomizationConfig,
+    SampledDomainParams,
+    DomainRandomizer,
+    create_curriculum_configs,
+)
+
+# Wrappers
+from simulation.wrappers import (
+    DomainRandomizationWrapper,
+    CurriculumRandomizationWrapper,
+    make_randomized_env,
+)
+
 # Integrated environment (requires gym-pybullet-drones)
 from simulation.environments import INTEGRATED_ENV_AVAILABLE
 if INTEGRATED_ENV_AVAILABLE:
@@ -86,6 +107,21 @@ __all__ = [
     "PIDController",
     "CascadedDroneController",
     "SimplePIDController",
+    # Domain Randomization
+    "DistributionType",
+    "RandomizationRange",
+    "PhysicsRandomizationConfig",
+    "ActuatorRandomizationConfig",
+    "SensorRandomizationConfig",
+    "EnvironmentRandomizationConfig",
+    "DomainRandomizationConfig",
+    "SampledDomainParams",
+    "DomainRandomizer",
+    "create_curriculum_configs",
+    # Wrappers
+    "DomainRandomizationWrapper",
+    "CurriculumRandomizationWrapper",
+    "make_randomized_env",
     # Availability flags
     "INTEGRATED_ENV_AVAILABLE",
 ]

@@ -359,3 +359,14 @@ def create_custom_platform(
     register_platform(platform_id, new_config)
 
     return platform_id
+
+
+# =============================================================================
+# LOAD ADDITIONAL PLATFORM CONFIGURATIONS
+# =============================================================================
+
+# Import jet UAV configurations (registers them automatically)
+try:
+    from . import jet_uav_configs
+except ImportError:
+    pass  # Jet UAV configs not available
