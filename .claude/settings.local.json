@@ -11,7 +11,14 @@
       "Bash(pip3 install:*)",
       "Bash(source ~/drone-env/bin/activate)",
       "Bash(/opt/homebrew/Caskroom/miniconda/base/condabin/conda env list:*)",
-      "Bash(/opt/homebrew/Caskroom/miniconda/base/envs/drone/bin/python:*)"
+      "Bash(/opt/homebrew/Caskroom/miniconda/base/envs/drone/bin/python:*)",
+      "Bash(cat:*)",
+      "WebFetch(domain:docs.godotengine.org)",
+      "WebFetch(domain:panda3d.org)",
+      "WebSearch",
+      "Bash(/opt/homebrew/Caskroom/miniconda/base/envs/drone/bin/pip install:*)",
+      "Bash(pkill:*)",
+      "Bash(chmod:*)"
     ]
   }
 }
