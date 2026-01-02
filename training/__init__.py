@@ -26,6 +26,17 @@ from training.pipelines import (
     TrainingArtifact,
 )
 
+# Combat training (dogfight self-play)
+from training.combat import (
+    ContinuousDogfightTrainer,
+    OpponentPool,
+    train_dogfight,
+    train_1v1,
+    train_swarm,
+    CombatAnalyzer,
+    analyze_training_run,
+)
+
 __all__ = [
     # Mission suites
     "MissionSuite",
@@ -41,4 +52,12 @@ __all__ = [
     # Configuration
     "PipelineConfig",
     "TrainingArtifact",
+    # Combat training
+    "ContinuousDogfightTrainer",
+    "OpponentPool",
+    "train_dogfight",
+    "train_1v1",
+    "train_swarm",
+    "CombatAnalyzer",
+    "analyze_training_run",
 ]

@@ -35,6 +35,18 @@ from .carrier_ops_env import (
     CarrierState,
     CatapultState,
 )
+from .dogfight_env import (
+    DogfightEnv,
+    DogfightConfig,
+    CombatDrone,
+    WeaponType,
+    CombatResult,
+    Weapon,
+    create_1v1_dogfight,
+    create_2v2_dogfight,
+    create_swarm_battle,
+    create_tournament_match,
+)
 
 __all__ = [
     # Base environment
@@ -60,4 +72,15 @@ __all__ = [
     "ApproachCase",
     "CarrierState",
     "CatapultState",
+    # Dogfight
+    "DogfightEnv",
+    "DogfightConfig",
+    "CombatDrone",
+    "WeaponType",
+    "CombatResult",
+    "Weapon",
+    "create_1v1_dogfight",
+    "create_2v2_dogfight",
+    "create_swarm_battle",
+    "create_tournament_match",
 ]
