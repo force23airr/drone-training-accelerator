@@ -72,12 +72,30 @@ from simulation.wrappers import (
     DomainRandomizationWrapper,
     CurriculumRandomizationWrapper,
     make_randomized_env,
+    ShieldAction,
+    SafetyLimits,
+    ShieldConfig,
+    ShieldState,
+    SafetyShieldWrapper,
+    make_shielded_env,
 )
 
 # Integrated environment (requires gym-pybullet-drones)
 from simulation.environments import INTEGRATED_ENV_AVAILABLE
 if INTEGRATED_ENV_AVAILABLE:
     from simulation.environments.integrated_environment import IntegratedDroneEnvironment
+
+# PX4 SITL Integration
+try:
+    from simulation.integration import (
+        PX4SITLBridge,
+        PX4SITLConfig,
+        PX4SITLEnv,
+        MAVLinkConnection,
+    )
+    PX4_SITL_AVAILABLE = True
+except ImportError:
+    PX4_SITL_AVAILABLE = False
 
 __all__ = [
     # Environments
@@ -122,10 +140,27 @@ __all__ = [
     "DomainRandomizationWrapper",
     "CurriculumRandomizationWrapper",
     "make_randomized_env",
+    # Safety Shield
+    "ShieldAction",
+    "SafetyLimits",
+    "ShieldConfig",
+    "ShieldState",
+    "SafetyShieldWrapper",
+    "make_shielded_env",
     # Availability flags
     "INTEGRATED_ENV_AVAILABLE",
+    "PX4_SITL_AVAILABLE",
 ]
 
 # Add integrated environment if available
 if INTEGRATED_ENV_AVAILABLE:
     __all__.append("IntegratedDroneEnvironment")
+
+# Add PX4 SITL if available
+if PX4_SITL_AVAILABLE:
+    __all__.extend([
+        "PX4SITLBridge",
+        "PX4SITLConfig",
+        "PX4SITLEnv",
+        "MAVLinkConnection",
+    ])
