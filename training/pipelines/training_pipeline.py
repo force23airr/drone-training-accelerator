@@ -60,7 +60,14 @@ from evaluation.gates import (
 from evaluation.reports import ReportGenerator
 
 # Simulation components
-from simulation.wrappers import SafetyShieldWrapper, ShieldConfig, make_shielded_env
+from simulation.control import ActionMode
+from simulation.wrappers import (
+    SafetyShieldWrapper,
+    ShieldConfig,
+    make_shielded_env,
+    ActionAdapterConfig,
+    make_action_adapted_env,
+)
 
 
 # =============================================================================
@@ -87,10 +94,18 @@ class PipelineConfig:
     bc_learning_rate: float = 3e-4
     bc_batch_size: int = 256
 
+    # Action interface (optional high-level control)
+    action_mode: Optional[str] = None  # motor_thrusts, attitude, attitude_rates, velocity
+    action_adapter_config: Optional[Dict[str, Any]] = None
+
     # RL fine-tuning (optional)
     enable_rl: bool = True
     rl_algorithm: str = "PPO"
     rl_timesteps: int = 500000
+
+    # Safety during training
+    train_with_shield: bool = False
+    train_shield_config: Optional[ShieldConfig] = None
 
     # Evaluation settings
     eval_episodes: int = 100
@@ -135,6 +150,8 @@ class PipelineConfig:
             'bc_epochs': self.bc_epochs,
             'bc_hidden_sizes': self.bc_hidden_sizes,
             'bc_learning_rate': self.bc_learning_rate,
+            'action_mode': self.action_mode,
+            'train_with_shield': self.train_with_shield,
             'rl_algorithm': self.rl_algorithm if self.enable_rl else None,
             'rl_timesteps': self.rl_timesteps if self.enable_rl else 0,
             'eval_episodes': self.eval_episodes,
@@ -344,6 +361,18 @@ def train_from_demonstrations(
     elif env is None:
         raise ValueError("Must provide either 'env' or 'env_fn'")
 
+    # Optional action-space adaptation (high-level control)
+    if config.action_mode:
+        try:
+            mode = ActionMode(config.action_mode)
+        except ValueError:
+            raise ValueError(f"Unknown action_mode '{config.action_mode}'")
+
+        adapter_cfg = ActionAdapterConfig(action_mode=mode, **(config.action_adapter_config or {}))
+        env = make_action_adapted_env(env, adapter_cfg)
+        if verbose:
+            print(f"  Action mode: {mode.value}")
+
     # ==========================================================================
     # PHASE 1: DATA LOADING AND QUALITY FILTERING
     # ==========================================================================
@@ -376,6 +405,7 @@ def train_from_demonstrations(
         dataset=dataset,
         config=config,
         output_dir=output_path,
+        action_space=getattr(env, "action_space", None),
         verbose=verbose,
     )
 
@@ -541,6 +571,7 @@ def _train_bc(
     dataset: DemonstrationDataset,
     config: PipelineConfig,
     output_dir: Path,
+    action_space,
     verbose: bool,
 ) -> Tuple[BehavioralCloning, Dict[str, Any]]:
     """Phase 2: Train behavioral cloning policy."""
@@ -551,6 +582,7 @@ def _train_bc(
         hidden_sizes=config.bc_hidden_sizes,
         learning_rate=config.bc_learning_rate,
         batch_size=config.bc_batch_size,
+        action_space=action_space,
         device=config.device,
     )
 
@@ -591,10 +623,17 @@ def _train_rl(
             print(f"  Algorithm: {config.rl_algorithm}")
             print(f"  Timesteps: {config.rl_timesteps}")
 
+        train_env = env
+        if config.train_with_shield:
+            shield_cfg = config.train_shield_config or config.shield_config or ShieldConfig(apply_penalties=False)
+            train_env = make_shielded_env(env, shield_cfg)
+            if verbose:
+                print(f"  Training shield: ON (penalties={shield_cfg.apply_penalties})")
+
         # Create model
         model = algo_class(
             "MlpPolicy",
-            env,
+            train_env,
             verbose=1 if verbose else 0,
             device=config.device,
         )
@@ -1029,10 +1068,12 @@ def _get_env_info(env) -> Tuple[str, Dict[str, Any]]:
             env_config = {k: str(v) for k, v in env.config.items()}
 
     # Check for common config attributes
-    for attr in ['platform_config', 'env_conditions', 'observation_space', 'action_space']:
+    for attr in ['platform_config', 'env_conditions', 'observation_space', 'action_space', 'action_mode']:
         if hasattr(env, attr):
             val = getattr(env, attr)
-            if hasattr(val, 'shape'):
+            if attr == 'action_mode':
+                env_config[attr] = str(val)
+            elif hasattr(val, 'shape'):
                 env_config[attr] = str(val.shape)
             elif hasattr(val, '__dict__'):
                 env_config[attr] = type(val).__name__

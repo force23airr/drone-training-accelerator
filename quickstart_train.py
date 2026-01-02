@@ -11,6 +11,8 @@ from pathlib import Path
 
 from simulation.environments import EnvironmentalSimulator
 from simulation.platforms.platform_configs import get_platform_config, list_platforms
+from simulation.control import ActionMode
+from simulation.wrappers import ActionAdapterConfig, make_action_adapted_env
 from training.suites.mission_suites import MissionSuite
 from training.parallel.parallel_trainer import ParallelTrainer
 
@@ -59,6 +61,12 @@ def parse_args():
         action="store_true",
         help="Enable visualization during training"
     )
+    parser.add_argument(
+        "--action-mode",
+        type=str,
+        default=None,
+        help="Action interface: motor_thrusts, attitude, attitude_rates, velocity"
+    )
     return parser.parse_args()
 
 
@@ -89,6 +97,11 @@ def main():
         platform_config=platform_config,
         render_mode="human" if args.render else None
     )
+
+    if args.action_mode:
+        mode = ActionMode(args.action_mode)
+        env = make_action_adapted_env(env, ActionAdapterConfig(action_mode=mode))
+        print(f"Action mode: {mode.value}")
 
     # Load mission suite
     mission = MissionSuite(args.mission)

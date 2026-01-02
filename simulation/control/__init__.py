@@ -15,10 +15,12 @@ from simulation.control.pid_controller import (
     CascadedDroneController,
     SimplePIDController,
 )
+from simulation.control.action_modes import ActionMode
 
 __all__ = [
     "PIDGains",
     "PIDController",
     "CascadedDroneController",
     "SimplePIDController",
+    "ActionMode",
 ]

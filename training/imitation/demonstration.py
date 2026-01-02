@@ -18,6 +18,7 @@ import json
 import pickle
 from datetime import datetime
 import hashlib
+from collections import defaultdict
 
 
 @dataclass
@@ -427,6 +428,106 @@ class DemonstrationDataset:
             }
 
         return batch
+
+    def sample_transition_batch(
+        self,
+        batch_size: int,
+        balance_by: Optional[str] = None,
+    ) -> Dict[str, np.ndarray]:
+        """
+        Sample a batch of transitions, optionally balanced across demo groups.
+
+        Args:
+            batch_size: Number of transitions to sample
+            balance_by: Metadata field to balance on (e.g., "task_type",
+                        "pilot_id", "aircraft_type", "source", or "environment:<key>")
+
+        Returns:
+            Dictionary with observations, actions, next_observations, dones, and groups.
+        """
+        if not balance_by:
+            return self.sample_batch(batch_size, include_next_obs=True)
+
+        groups = defaultdict(list)
+        for demo in self.demonstrations:
+            key = self._get_group_key(demo, balance_by)
+            groups[key].append(demo)
+
+        if not groups:
+            return self.sample_batch(batch_size, include_next_obs=True)
+
+        per_group = max(1, batch_size // len(groups))
+        obs_list = []
+        act_list = []
+        next_obs_list = []
+        dones_list = []
+        group_labels = []
+
+        for key, demos in groups.items():
+            group_obs = []
+            group_acts = []
+            group_next_obs = []
+            group_dones = []
+
+            for demo in demos:
+                obs, acts, next_obs, dones = demo.get_transitions()
+                if len(obs) == 0:
+                    continue
+                group_obs.append(obs)
+                group_acts.append(acts)
+                group_next_obs.append(next_obs)
+                group_dones.append(dones)
+
+            if not group_obs:
+                continue
+
+            group_obs = np.concatenate(group_obs, axis=0)
+            group_acts = np.concatenate(group_acts, axis=0)
+            group_next_obs = np.concatenate(group_next_obs, axis=0)
+            group_dones = np.concatenate(group_dones, axis=0)
+
+            sample_size = min(per_group, len(group_obs))
+            indices = np.random.choice(len(group_obs), size=sample_size, replace=False)
+
+            obs_list.append(group_obs[indices])
+            act_list.append(group_acts[indices])
+            next_obs_list.append(group_next_obs[indices])
+            dones_list.append(group_dones[indices])
+            group_labels.extend([key] * sample_size)
+
+        if not obs_list:
+            return self.sample_batch(batch_size, include_next_obs=True)
+
+        obs_batch = np.concatenate(obs_list, axis=0)
+        acts_batch = np.concatenate(act_list, axis=0)
+        next_obs_batch = np.concatenate(next_obs_list, axis=0)
+        dones_batch = np.concatenate(dones_list, axis=0)
+
+        # Top up if needed
+        if len(obs_batch) < batch_size:
+            extra = self.sample_batch(batch_size - len(obs_batch), include_next_obs=True)
+            obs_batch = np.concatenate([obs_batch, extra['observations']], axis=0)
+            acts_batch = np.concatenate([acts_batch, extra['actions']], axis=0)
+            next_obs_batch = np.concatenate([next_obs_batch, extra['next_observations']], axis=0)
+            dones_batch = np.concatenate([dones_batch, extra['dones']], axis=0)
+            group_labels.extend(["unbalanced"] * (batch_size - len(group_labels)))
+
+        return {
+            'observations': obs_batch,
+            'actions': acts_batch,
+            'next_observations': next_obs_batch,
+            'dones': dones_batch,
+            'groups': np.array(group_labels, dtype=object),
+        }
+
+    def _get_group_key(self, demo: Demonstration, balance_by: str) -> str:
+        """Resolve grouping key for balanced sampling."""
+        if balance_by.startswith("environment:"):
+            env_key = balance_by.split("environment:", 1)[1]
+            return str(demo.environment.get(env_key, "unknown"))
+        if balance_by == "environment":
+            return str(demo.environment.get("scenario", "unknown"))
+        return str(getattr(demo, balance_by, "unknown"))
 
     def filter_by_task(self, task_type: str) -> 'DemonstrationDataset':
         """Get subset of demonstrations for a specific task."""

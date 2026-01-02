@@ -51,6 +51,7 @@ from simulation.control import (
     PIDController,
     CascadedDroneController,
     SimplePIDController,
+    ActionMode,
 )
 
 # Domain randomization
@@ -78,6 +79,9 @@ from simulation.wrappers import (
     ShieldState,
     SafetyShieldWrapper,
     make_shielded_env,
+    ActionAdapterConfig,
+    ActionAdapterWrapper,
+    make_action_adapted_env,
 )
 
 # Integrated environment (requires gym-pybullet-drones)
@@ -125,6 +129,7 @@ __all__ = [
     "PIDController",
     "CascadedDroneController",
     "SimplePIDController",
+    "ActionMode",
     # Domain Randomization
     "DistributionType",
     "RandomizationRange",
@@ -147,6 +152,10 @@ __all__ = [
     "ShieldState",
     "SafetyShieldWrapper",
     "make_shielded_env",
+    # Action adapter
+    "ActionAdapterConfig",
+    "ActionAdapterWrapper",
+    "make_action_adapted_env",
     # Availability flags
     "INTEGRATED_ENV_AVAILABLE",
     "PX4_SITL_AVAILABLE",

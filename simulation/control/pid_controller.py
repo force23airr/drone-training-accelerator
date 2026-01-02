@@ -414,6 +414,36 @@ class CascadedDroneController:
 
         return self.motor_mixing(target_thrust, torques)
 
+    def compute_rate_control(
+        self,
+        state: np.ndarray,
+        target_rates: np.ndarray,
+        target_thrust: float,
+        dt: float = 1/48,
+    ) -> np.ndarray:
+        """
+        Compute motor commands for direct angular-rate tracking.
+
+        Args:
+            state: [pos(3), vel(3), rpy(3), ang_vel(3)]
+            target_rates: Desired body rates [p, q, r] (rad/s)
+            target_thrust: Desired total thrust (N)
+            dt: Time step
+
+        Returns:
+            motor_rpm: [rpm1, rpm2, rpm3, rpm4]
+        """
+        ang_vel = state[9:12]
+        rate_error = target_rates - ang_vel
+
+        torques = np.array([
+            self.rate_pid_roll.update(rate_error[0], dt),
+            self.rate_pid_pitch.update(rate_error[1], dt),
+            self.rate_pid_yaw.update(rate_error[2], dt),
+        ])
+
+        return self.motor_mixing(target_thrust, torques)
+
 
 class SimplePIDController:
     """

@@ -44,6 +44,8 @@ class BCPolicyNetwork(nn.Module):
         activation: str = "relu",
         output_activation: str = "tanh",
         dropout: float = 0.0,
+        action_scale: Optional[np.ndarray] = None,
+        action_bias: Optional[np.ndarray] = None,
     ):
         super().__init__()
 
@@ -85,6 +87,15 @@ class BCPolicyNetwork(nn.Module):
         else:
             self.output_activation = nn.Identity()
 
+        # Action scaling (for non-normalized action spaces)
+        if action_scale is None:
+            action_scale = np.ones(action_dim, dtype=np.float32)
+        if action_bias is None:
+            action_bias = np.zeros(action_dim, dtype=np.float32)
+
+        self.register_buffer("action_scale", torch.as_tensor(action_scale, dtype=torch.float32))
+        self.register_buffer("action_bias", torch.as_tensor(action_bias, dtype=torch.float32))
+
         # Initialize weights
         self._init_weights()
 
@@ -103,6 +114,7 @@ class BCPolicyNetwork(nn.Module):
         features = self.features(obs)
         actions = self.action_head(features)
         actions = self.output_activation(actions)
+        actions = actions * self.action_scale + self.action_bias
         return actions
 
     def predict(
@@ -136,6 +148,8 @@ class BCPolicyNetwork(nn.Module):
             'observation_dim': self.observation_dim,
             'action_dim': self.action_dim,
             'hidden_sizes': self.hidden_sizes,
+            'action_scale': self.action_scale.cpu().numpy(),
+            'action_bias': self.action_bias.cpu().numpy(),
         }
         torch.save(save_dict, path)
 
@@ -147,6 +161,8 @@ class BCPolicyNetwork(nn.Module):
             observation_dim=save_dict['observation_dim'],
             action_dim=save_dict['action_dim'],
             hidden_sizes=save_dict['hidden_sizes'],
+            action_scale=save_dict.get('action_scale'),
+            action_bias=save_dict.get('action_bias'),
         )
         model.load_state_dict(save_dict['state_dict'])
         return model
@@ -168,6 +184,9 @@ class BehavioralCloning:
         learning_rate: float = 3e-4,
         batch_size: int = 256,
         weight_decay: float = 1e-5,
+        action_space: Optional[Any] = None,
+        action_scale: Optional[np.ndarray] = None,
+        action_bias: Optional[np.ndarray] = None,
         device: str = "auto",
     ):
         # Auto-detect device
@@ -180,11 +199,20 @@ class BehavioralCloning:
         self.action_dim = action_dim
         self.batch_size = batch_size
 
+        # Action scaling
+        if action_scale is None or action_bias is None:
+            action_scale, action_bias = self._derive_action_scaling(
+                action_dim=action_dim,
+                action_space=action_space,
+            )
+
         # Create policy network
         self.policy = BCPolicyNetwork(
             observation_dim=observation_dim,
             action_dim=action_dim,
             hidden_sizes=hidden_sizes,
+            action_scale=action_scale,
+            action_bias=action_bias,
         ).to(self.device)
 
         # Optimizer
@@ -200,6 +228,34 @@ class BehavioralCloning:
         # Training statistics
         self.train_losses: List[float] = []
         self.val_losses: List[float] = []
+
+    @staticmethod
+    def _derive_action_scaling(
+        action_dim: int,
+        action_space: Optional[Any] = None,
+    ) -> Tuple[np.ndarray, np.ndarray]:
+        """Derive action scaling from a Gymnasium space if provided."""
+        if action_space is None:
+            return np.ones(action_dim, dtype=np.float32), np.zeros(action_dim, dtype=np.float32)
+
+        low = getattr(action_space, "low", None)
+        high = getattr(action_space, "high", None)
+        if low is None or high is None:
+            return np.ones(action_dim, dtype=np.float32), np.zeros(action_dim, dtype=np.float32)
+
+        low = np.array(low, dtype=np.float32).flatten()
+        high = np.array(high, dtype=np.float32).flatten()
+        if low.shape[0] != action_dim or high.shape[0] != action_dim:
+            return np.ones(action_dim, dtype=np.float32), np.zeros(action_dim, dtype=np.float32)
+
+        scale = (high - low) * 0.5
+        bias = (high + low) * 0.5
+
+        # Handle non-finite bounds
+        scale[~np.isfinite(scale)] = 1.0
+        bias[~np.isfinite(bias)] = 0.0
+
+        return scale, bias
 
     def create_dataloader(
         self,
@@ -416,6 +472,7 @@ def train_bc(
     learning_rate: float = 3e-4,
     batch_size: int = 256,
     device: str = "auto",
+    action_space: Optional[Any] = None,
     save_path: Optional[str] = None,
     verbose: bool = True,
 ) -> Tuple[BehavioralCloning, Dict[str, Any]]:
@@ -429,6 +486,7 @@ def train_bc(
         learning_rate: Learning rate
         batch_size: Batch size
         device: Device to use
+        action_space: Optional Gymnasium action space for scaling
         save_path: Optional path to save model
         verbose: Print progress
 
@@ -441,6 +499,7 @@ def train_bc(
         hidden_sizes=hidden_sizes,
         learning_rate=learning_rate,
         batch_size=batch_size,
+        action_space=action_space,
         device=device,
     )
 
@@ -495,6 +554,7 @@ def pretrain_from_demos(
         dataset=dataset,
         num_epochs=bc_epochs,
         device=device,
+        action_space=getattr(env, "action_space", None),
         verbose=verbose,
     )
 

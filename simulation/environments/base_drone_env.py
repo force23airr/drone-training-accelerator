@@ -438,6 +438,7 @@ class BaseDroneEnv(gym.Env):
         self._setup_environment()
 
         obs = self._get_observation()
+        self._last_obs = obs
         info = {
             "episode": self._episode_count,
             "conditions": self.env_conditions.to_dict(),
@@ -459,6 +460,7 @@ class BaseDroneEnv(gym.Env):
 
         # Get new state
         obs = self._get_observation()
+        self._last_obs = obs
         reward = self._compute_reward(obs, action)
         terminated, truncated = self._check_termination(obs)
 

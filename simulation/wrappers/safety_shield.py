@@ -19,6 +19,8 @@ from dataclasses import dataclass, field
 from typing import Dict, Any, Optional, Tuple, List, Callable
 from enum import Enum
 
+from simulation.control import ActionMode
+
 
 class ShieldAction(Enum):
     """Action taken by the safety shield."""
@@ -89,6 +91,9 @@ class ShieldConfig:
     # Logging
     log_interventions: bool = True
 
+    # Action interface
+    action_mode: Optional[ActionMode] = None  # Auto-detect if None
+
 
 @dataclass
 class ShieldState:
@@ -130,12 +135,17 @@ class SafetyShieldWrapper(gym.Wrapper):
         """
         super().__init__(env)
         self.config = config or ShieldConfig()
+        self.action_mode = self._resolve_action_mode(self.config.action_mode)
         self.guardian_controller = guardian_controller or self._default_guardian
 
         self._state = ShieldState()
         self._step_count = 0
         self._total_interventions = 0
         self._intervention_history: List[Dict[str, Any]] = []
+
+        self._num_motors = None
+        if hasattr(env, "platform_config"):
+            self._num_motors = env.platform_config.get("num_motors")
 
     @property
     def shield_state(self) -> ShieldState:
@@ -146,6 +156,38 @@ class SafetyShieldWrapper(gym.Wrapper):
     def intervention_count(self) -> int:
         """Total number of interventions."""
         return self._total_interventions
+
+    def _resolve_action_mode(self, mode: Optional[ActionMode]) -> ActionMode:
+        """Resolve action mode from config or environment."""
+        if mode is not None:
+            if isinstance(mode, ActionMode):
+                return mode
+            try:
+                return ActionMode(mode)
+            except ValueError:
+                pass
+
+        env_mode = getattr(self.env, "action_mode", None)
+        if env_mode is not None:
+            if isinstance(env_mode, ActionMode):
+                return env_mode
+            try:
+                return ActionMode(env_mode)
+            except ValueError:
+                pass
+
+        # Infer from action space and platform config when possible
+        action_shape = getattr(getattr(self.env, "action_space", None), "shape", None)
+        num_motors = None
+        if hasattr(self.env, "platform_config"):
+            num_motors = self.env.platform_config.get("num_motors")
+
+        if action_shape and num_motors and action_shape == (num_motors,):
+            return ActionMode.MOTOR_THRUSTS
+        if action_shape == (3,):
+            return ActionMode.VELOCITY
+
+        return ActionMode.ATTITUDE
 
     def reset(
         self,
@@ -339,78 +381,229 @@ class SafetyShieldWrapper(gym.Wrapper):
         clamped = action.copy()
         was_clamped = False
         reasons = []
+        mode = self.action_mode
 
-        # Assume action is [roll_cmd, pitch_cmd, yaw_rate_cmd, thrust]
-        # This format is common but may need adaptation
+        if mode == ActionMode.MOTOR_THRUSTS:
+            clamped = np.clip(clamped, -1.0, 1.0)
 
-        if len(action) >= 4:
-            # Clamp attitude commands based on tilt limits
-            max_tilt_rad = np.deg2rad(limits.max_tilt_deg)
-
-            if abs(action[0]) > max_tilt_rad:
-                clamped[0] = np.clip(action[0], -max_tilt_rad, max_tilt_rad)
-                was_clamped = True
-                reasons.append("roll")
-
-            if abs(action[1]) > max_tilt_rad:
-                clamped[1] = np.clip(action[1], -max_tilt_rad, max_tilt_rad)
-                was_clamped = True
-                reasons.append("pitch")
-
-            # Clamp thrust based on altitude
+            # Near minimum altitude: enforce minimum thrust
             if position[2] < limits.min_altitude_m + 0.5:
-                # Near minimum altitude - ensure positive climb
-                clamped[3] = max(clamped[3], limits.min_throttle + 0.2)
-                if action[3] < limits.min_throttle + 0.2:
+                min_action = self._action_from_throttle(limits.min_throttle + 0.2)
+                if np.any(clamped < min_action):
+                    clamped = np.maximum(clamped, min_action)
                     was_clamped = True
                     reasons.append("min_altitude_thrust")
 
+            # Near maximum altitude: limit climb
             if position[2] > limits.max_altitude_m - 1.0:
-                # Near maximum altitude - limit climb
-                clamped[3] = min(clamped[3], 0.5)
-                if action[3] > 0.5:
+                max_action = self._action_from_throttle(min(0.5, limits.max_throttle))
+                if np.any(clamped > max_action):
+                    clamped = np.minimum(clamped, max_action)
                     was_clamped = True
                     reasons.append("max_altitude_thrust")
 
-            # Always clamp throttle to valid range
-            orig_thrust = clamped[3]
-            clamped[3] = np.clip(clamped[3], limits.min_throttle, limits.max_throttle)
-            if clamped[3] != orig_thrust:
+        elif mode == ActionMode.ATTITUDE and len(action) >= 4:
+            max_tilt_rad = np.deg2rad(limits.max_tilt_deg)
+
+            roll = np.clip(action[0] * max_tilt_rad, -max_tilt_rad, max_tilt_rad)
+            pitch = np.clip(action[1] * max_tilt_rad, -max_tilt_rad, max_tilt_rad)
+            yaw = np.clip(action[2] * np.pi, -np.pi, np.pi)
+            throttle = self._throttle_from_action(action[3])
+
+            throttle, throttle_reasons = self._clamp_throttle_for_altitude(throttle, position)
+            reasons.extend(throttle_reasons)
+            if throttle_reasons:
                 was_clamped = True
-                reasons.append("throttle_range")
+
+            clamped[0] = roll / max_tilt_rad
+            clamped[1] = pitch / max_tilt_rad
+            clamped[2] = yaw / np.pi
+            clamped[3] = self._action_from_throttle(throttle)
+
+            if np.any(clamped != action):
+                was_clamped = True
+                if abs(action[0]) > 1.0:
+                    reasons.append("roll")
+                if abs(action[1]) > 1.0:
+                    reasons.append("pitch")
+
+        elif mode == ActionMode.ATTITUDE_RATES and len(action) >= 4:
+            max_rate = np.deg2rad(limits.max_tilt_rate_deg_s)
+            max_yaw_rate = np.deg2rad(limits.max_tilt_rate_deg_s)
+
+            roll_rate = np.clip(action[0] * max_rate, -max_rate, max_rate)
+            pitch_rate = np.clip(action[1] * max_rate, -max_rate, max_rate)
+            yaw_rate = np.clip(action[2] * max_yaw_rate, -max_yaw_rate, max_yaw_rate)
+            throttle = self._throttle_from_action(action[3])
+
+            throttle, throttle_reasons = self._clamp_throttle_for_altitude(throttle, position)
+            reasons.extend(throttle_reasons)
+            if throttle_reasons:
+                was_clamped = True
+
+            clamped[0] = roll_rate / max_rate
+            clamped[1] = pitch_rate / max_rate
+            clamped[2] = yaw_rate / max_yaw_rate
+            clamped[3] = self._action_from_throttle(throttle)
+
+            if np.any(clamped != action):
+                was_clamped = True
+
+        elif mode == ActionMode.VELOCITY and len(action) >= 3:
+            max_h = limits.max_horizontal_speed_m_s
+            max_v = limits.max_vertical_speed_m_s
+
+            vx = np.clip(action[0] * max_h, -max_h, max_h)
+            vy = np.clip(action[1] * max_h, -max_h, max_h)
+            vz = np.clip(action[2] * max_v, -max_v, max_v)
+
+            # Geofence-aware velocity clamping
+            margin = limits.geofence_margin_m
+            if position[0] < limits.geofence_x_min + margin and vx < 0:
+                vx = 0.0
+                was_clamped = True
+                reasons.append("geofence_x_min")
+            if position[0] > limits.geofence_x_max - margin and vx > 0:
+                vx = 0.0
+                was_clamped = True
+                reasons.append("geofence_x_max")
+            if position[1] < limits.geofence_y_min + margin and vy < 0:
+                vy = 0.0
+                was_clamped = True
+                reasons.append("geofence_y_min")
+            if position[1] > limits.geofence_y_max - margin and vy > 0:
+                vy = 0.0
+                was_clamped = True
+                reasons.append("geofence_y_max")
+
+            clamped[0] = vx / max_h if max_h > 0 else 0.0
+            clamped[1] = vy / max_h if max_h > 0 else 0.0
+            clamped[2] = vz / max_v if max_v > 0 else 0.0
+            if len(action) >= 4:
+                clamped[3] = np.clip(action[3], -1.0, 1.0)
 
         reason = f"Clamped: {', '.join(reasons)}" if reasons else ""
         return clamped, was_clamped, reason
 
     def _emergency_stop_action(self) -> np.ndarray:
         """Generate emergency stop action (level and maintain altitude)."""
-        # Zero attitude commands, hover throttle
-        return np.array([0.0, 0.0, 0.0, 0.5], dtype=np.float32)
+        mode = self.action_mode
+        if mode == ActionMode.MOTOR_THRUSTS:
+            return self._hover_motor_action()
+        if mode == ActionMode.VELOCITY:
+            shape = getattr(getattr(self.env, "action_space", None), "shape", (3,))
+            if shape and len(shape) == 1 and shape[0] == 4:
+                return np.array([0.0, 0.0, 0.0, 0.0], dtype=np.float32)
+            return np.array([0.0, 0.0, 0.0], dtype=np.float32)
+        # Default: attitude or attitude-rate
+        return np.array([0.0, 0.0, 0.0, self._action_from_throttle(self._hover_throttle())], dtype=np.float32)
 
     def _default_guardian(self, obs: np.ndarray) -> np.ndarray:
         """Default guardian controller - stabilize and hover."""
-        # Parse observation
         position, velocity, orientation, angular_vel = self._parse_observation(obs)
+        roll, pitch, yaw = self._orientation_to_rpy(orientation)
+        limits = self.config.limits
 
-        # Simple PD controller for stabilization
-        # Zero roll/pitch, zero yaw rate, maintain altitude
-        roll_cmd = -orientation[0] * 2.0 - angular_vel[0] * 0.5
-        pitch_cmd = -orientation[1] * 2.0 - angular_vel[1] * 0.5
-        yaw_rate_cmd = 0.0
+        # Conservative PD gains for recovery
+        roll_correction = -roll * 2.0 - angular_vel[0] * 0.5
+        pitch_correction = -pitch * 2.0 - angular_vel[1] * 0.5
 
         # Altitude hold
         altitude_error = 2.0 - position[2]  # Target 2m
-        thrust = 0.5 + altitude_error * 0.3 - velocity[2] * 0.2
+        thrust = self._hover_throttle() + altitude_error * 0.3 - velocity[2] * 0.2
+        thrust = float(np.clip(thrust, limits.min_throttle, limits.max_throttle))
 
-        action = np.array([roll_cmd, pitch_cmd, yaw_rate_cmd, thrust], dtype=np.float32)
+        if self.action_mode == ActionMode.MOTOR_THRUSTS:
+            return self._hover_motor_action()
 
-        # Clamp to safe ranges
-        max_tilt = np.deg2rad(20)  # Conservative tilt for recovery
-        action[0] = np.clip(action[0], -max_tilt, max_tilt)
-        action[1] = np.clip(action[1], -max_tilt, max_tilt)
-        action[3] = np.clip(action[3], 0.3, 0.8)
+        if self.action_mode == ActionMode.VELOCITY:
+            vz = 0.0
+            if position[2] < limits.min_altitude_m + 1.0:
+                vz = limits.max_vertical_speed_m_s * 0.5
+            action = [0.0, 0.0, vz / limits.max_vertical_speed_m_s]
+            shape = getattr(getattr(self.env, "action_space", None), "shape", (3,))
+            if shape and len(shape) == 1 and shape[0] == 4:
+                action.append(0.0)
+            return np.array(action, dtype=np.float32)
 
-        return action
+        if self.action_mode == ActionMode.ATTITUDE:
+            max_tilt = np.deg2rad(limits.max_tilt_deg)
+            roll_cmd = np.clip(roll_correction, -max_tilt, max_tilt)
+            pitch_cmd = np.clip(pitch_correction, -max_tilt, max_tilt)
+            return np.array([
+                roll_cmd / max_tilt,
+                pitch_cmd / max_tilt,
+                yaw / np.pi,
+                self._action_from_throttle(thrust),
+            ], dtype=np.float32)
+
+        # ATTITUDE_RATES fallback
+        max_rate = np.deg2rad(limits.max_tilt_rate_deg_s)
+        roll_rate = np.clip(roll_correction, -max_rate, max_rate)
+        pitch_rate = np.clip(pitch_correction, -max_rate, max_rate)
+        return np.array([
+            roll_rate / max_rate,
+            pitch_rate / max_rate,
+            0.0,
+            self._action_from_throttle(thrust),
+        ], dtype=np.float32)
+
+    def _throttle_from_action(self, action_val: float) -> float:
+        limits = self.config.limits
+        return (action_val + 1.0) * 0.5 * (limits.max_throttle - limits.min_throttle) + limits.min_throttle
+
+    def _action_from_throttle(self, throttle: float) -> float:
+        limits = self.config.limits
+        if limits.max_throttle <= limits.min_throttle:
+            return 0.0
+        return ((throttle - limits.min_throttle) / (limits.max_throttle - limits.min_throttle)) * 2.0 - 1.0
+
+    def _clamp_throttle_for_altitude(
+        self,
+        throttle: float,
+        position: np.ndarray,
+    ) -> Tuple[float, List[str]]:
+        limits = self.config.limits
+        reasons: List[str] = []
+
+        if position[2] < limits.min_altitude_m + 0.5:
+            min_throttle = limits.min_throttle + 0.2
+            if throttle < min_throttle:
+                throttle = min_throttle
+                reasons.append("min_altitude_thrust")
+
+        if position[2] > limits.max_altitude_m - 1.0:
+            max_throttle = min(0.5, limits.max_throttle)
+            if throttle > max_throttle:
+                throttle = max_throttle
+                reasons.append("max_altitude_thrust")
+
+        throttle = float(np.clip(throttle, limits.min_throttle, limits.max_throttle))
+        return throttle, reasons
+
+    def _hover_throttle(self) -> float:
+        limits = self.config.limits
+        if hasattr(self.env, "platform_config"):
+            cfg = self.env.platform_config
+            mass = cfg.get("mass", 1.0)
+            num_motors = cfg.get("num_motors", 4)
+            max_thrust = cfg.get("max_thrust_per_motor", None)
+            if max_thrust:
+                hover = (mass * 9.81) / (max_thrust * max(1, num_motors))
+                return float(np.clip(hover, limits.min_throttle, limits.max_throttle))
+        return float(np.clip(0.5, limits.min_throttle, limits.max_throttle))
+
+    def _hover_motor_action(self) -> np.ndarray:
+        num_motors = self._num_motors or 4
+        hover_action = self._action_from_throttle(self._hover_throttle())
+        return np.full((num_motors,), hover_action, dtype=np.float32)
+
+    def _orientation_to_rpy(self, orientation: np.ndarray) -> Tuple[float, float, float]:
+        if len(orientation) == 4:
+            return self._quat_to_rpy(orientation)
+        if len(orientation) >= 3:
+            return float(orientation[0]), float(orientation[1]), float(orientation[2])
+        return 0.0, 0.0, 0.0
 
     def _compute_tilt(self, orientation: np.ndarray) -> float:
         """Compute total tilt angle in degrees."""
@@ -425,10 +618,16 @@ class SafetyShieldWrapper(gym.Wrapper):
 
     def _quat_to_rp(self, q: np.ndarray) -> Tuple[float, float]:
         """Convert quaternion to roll, pitch."""
-        w, x, y, z = q
-        roll = np.arctan2(2*(w*x + y*z), 1 - 2*(x**2 + y**2))
-        pitch = np.arcsin(np.clip(2*(w*y - z*x), -1, 1))
+        roll, pitch, _ = self._quat_to_rpy(q)
         return roll, pitch
+
+    def _quat_to_rpy(self, q: np.ndarray) -> Tuple[float, float, float]:
+        """Convert quaternion to roll, pitch, yaw."""
+        w, x, y, z = q
+        roll = np.arctan2(2 * (w * x + y * z), 1 - 2 * (x ** 2 + y ** 2))
+        pitch = np.arcsin(np.clip(2 * (w * y - z * x), -1.0, 1.0))
+        yaw = np.arctan2(2 * (w * z + x * y), 1 - 2 * (y ** 2 + z ** 2))
+        return roll, pitch, yaw
 
     def _parse_observation(
         self,

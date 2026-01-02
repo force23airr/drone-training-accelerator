@@ -51,6 +51,8 @@ from training.imitation.gail import (
     GAIL,
     Discriminator,
 )
+from simulation.control import ActionMode
+from simulation.wrappers import ActionAdapterConfig, make_action_adapted_env, ShieldConfig, make_shielded_env
 
 
 @dataclass
@@ -79,17 +81,33 @@ class HybridTrainingConfig:
     bc_learning_rate: float = 3e-4
     bc_batch_size: int = 256
 
+    # Action interface (optional high-level control)
+    action_mode: Optional[str] = None
+    action_adapter_config: Optional[Dict[str, Any]] = None
+
     # Phase 3: RL Optimization
     rl_algorithm: str = "PPO"  # PPO, SAC, TD3
     rl_timesteps: int = 500000
     use_gail: bool = False
     gail_timesteps: int = 100000
 
+    # GAIL discriminator hardening
+    gail_normalize_inputs: bool = True
+    gail_obs_noise_std: float = 0.01
+    gail_action_noise_std: float = 0.01
+    gail_gradient_penalty_coeff: float = 1.0
+    gail_balance_expert_batches_by: Optional[str] = None
+    gail_audit_interval: Optional[int] = None
+
     # General
     device: str = "auto"
     save_checkpoints: bool = True
     checkpoint_dir: str = "checkpoints"
     verbose: bool = True
+
+    # Safety
+    train_with_shield: bool = False
+    shield_config: Optional[ShieldConfig] = None
 
     # Performance targets
     target_reward: Optional[float] = None
@@ -121,9 +139,18 @@ class HybridILRLTrainer:
         self.env = env
         self.config = config or HybridTrainingConfig()
 
+        # Optional action-space adaptation
+        if self.config.action_mode:
+            mode = ActionMode(self.config.action_mode)
+            adapter_cfg = ActionAdapterConfig(
+                action_mode=mode,
+                **(self.config.action_adapter_config or {})
+            )
+            self.env = make_action_adapted_env(self.env, adapter_cfg)
+
         # Determine dimensions from environment
-        self.observation_dim = env.observation_space.shape[0]
-        self.action_dim = env.action_space.shape[0]
+        self.observation_dim = self.env.observation_space.shape[0]
+        self.action_dim = self.env.action_space.shape[0]
 
         # Training state
         self.dataset: Optional[DemonstrationDataset] = None
@@ -294,6 +321,7 @@ class HybridILRLTrainer:
             hidden_sizes=self.config.bc_hidden_sizes,
             learning_rate=self.config.bc_learning_rate,
             batch_size=self.config.bc_batch_size,
+            action_space=getattr(self.env, "action_space", None),
             device=str(self.device),
         )
 
@@ -355,11 +383,24 @@ class HybridILRLTrainer:
             self.phase_results.append(result)
             return result
 
+        gail_env = self.env
+        if self.config.train_with_shield:
+            shield_cfg = self.config.shield_config or ShieldConfig(apply_penalties=False)
+            gail_env = make_shielded_env(self.env, shield_cfg)
+            if self.config.verbose:
+                print(f"  Training shield: ON (penalties={shield_cfg.apply_penalties})")
+
         # Create GAIL trainer
         self.gail_model = GAIL(
-            env=self.env,
+            env=gail_env,
             expert_dataset=dataset,
             device=str(self.device),
+            normalize_inputs=self.config.gail_normalize_inputs,
+            obs_noise_std=self.config.gail_obs_noise_std,
+            action_noise_std=self.config.gail_action_noise_std,
+            gradient_penalty_coeff=self.config.gail_gradient_penalty_coeff,
+            balance_expert_batches_by=self.config.gail_balance_expert_batches_by,
+            audit_interval=self.config.gail_audit_interval,
         )
 
         # Train
@@ -423,10 +464,17 @@ class HybridILRLTrainer:
 
             algo_class = algorithms.get(self.config.rl_algorithm, PPO)
 
+            train_env = self.env
+            if self.config.train_with_shield:
+                shield_cfg = self.config.shield_config or ShieldConfig(apply_penalties=False)
+                train_env = make_shielded_env(self.env, shield_cfg)
+                if self.config.verbose:
+                    print(f"  Training shield: ON (penalties={shield_cfg.apply_penalties})")
+
             # Create model
             self.rl_model = algo_class(
                 "MlpPolicy",
-                self.env,
+                train_env,
                 verbose=1 if self.config.verbose else 0,
                 device=self.device,
             )
@@ -441,7 +489,7 @@ class HybridILRLTrainer:
             eval_callback = None
             if self.config.save_checkpoints:
                 eval_callback = EvalCallback(
-                    self.env,
+                    train_env,
                     best_model_save_path=self.config.checkpoint_dir,
                     log_path=self.config.checkpoint_dir,
                     eval_freq=10000,

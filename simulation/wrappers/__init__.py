@@ -18,6 +18,11 @@ from simulation.wrappers.safety_shield import (
     SafetyShieldWrapper,
     make_shielded_env,
 )
+from simulation.wrappers.action_adapter import (
+    ActionAdapterConfig,
+    ActionAdapterWrapper,
+    make_action_adapted_env,
+)
 
 __all__ = [
     # Domain randomization
@@ -31,4 +36,8 @@ __all__ = [
     "ShieldState",
     "SafetyShieldWrapper",
     "make_shielded_env",
+    # Action adapter
+    "ActionAdapterConfig",
+    "ActionAdapterWrapper",
+    "make_action_adapted_env",
 ]
