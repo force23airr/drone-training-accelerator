@@ -128,13 +128,19 @@ class DogfightConfig:
     num_red: int = 1
     num_blue: int = 1
 
+    # Spawn randomization
+    spawn_position_jitter: float = 0.0  # meters, applied to x/y
+    spawn_altitude_jitter: float = 0.0  # meters
+    spawn_heading_jitter: float = 0.0  # radians
+    spawn_speed_jitter: float = 0.0  # fraction of base speed
+
     # Combat rules
     respawn_enabled: bool = True
     respawn_delay: float = 3.0
     friendly_fire: bool = False
-    max_match_time: float = 300.0  # 5 minutes
+    max_match_time: Optional[float] = 300.0  # seconds (None disables)
     win_condition: str = "kills"  # "kills", "last_alive", "score"
-    kills_to_win: int = 10
+    kills_to_win: Optional[int] = 10
 
     # Weapons
     weapons_config: List[Dict[str, Any]] = field(default_factory=lambda: [
@@ -150,6 +156,7 @@ class DogfightConfig:
     # Rewards
     reward_kill: float = 100.0
     reward_hit: float = 10.0
+    reward_fire: float = 0.0
     reward_death: float = -50.0
     reward_out_of_bounds: float = -20.0
     reward_per_second: float = -0.1  # Encourages aggression
@@ -265,15 +272,14 @@ class DogfightEnv(gym.Env):
 
         # Red team
         for i in range(self.config.num_red):
-            spawn_pos = self._get_spawn_position(0, i)
-            spawn_vel = np.array([self.config.min_speed * 1.5, 0, 0])
+            spawn_pos, spawn_vel, spawn_orient = self._sample_spawn_state(0, i)
 
             drone = CombatDrone(
                 drone_id=drone_id,
                 team=0,
                 position=spawn_pos,
                 velocity=spawn_vel,
-                orientation=np.zeros(3),
+                orientation=spawn_orient,
                 angular_velocity=np.zeros(3),
                 weapons=self._create_weapons(),
             )
@@ -284,15 +290,14 @@ class DogfightEnv(gym.Env):
 
         # Blue team
         for i in range(self.config.num_blue):
-            spawn_pos = self._get_spawn_position(1, i)
-            spawn_vel = np.array([-self.config.min_speed * 1.5, 0, 0])
+            spawn_pos, spawn_vel, spawn_orient = self._sample_spawn_state(1, i)
 
             drone = CombatDrone(
                 drone_id=drone_id,
                 team=1,
                 position=spawn_pos,
                 velocity=spawn_vel,
-                orientation=np.array([0, 0, np.pi]),  # Facing opposite
+                orientation=spawn_orient,
                 angular_velocity=np.zeros(3),
                 weapons=self._create_weapons(),
             )
@@ -307,6 +312,48 @@ class DogfightEnv(gym.Env):
         y = (index - (self.config.num_red if team == 0 else self.config.num_blue) / 2) * 50
         z = (self.config.arena_height_min + self.config.arena_height_max) / 2
         return np.array([x, y, z])
+
+    def _sample_spawn_state(
+        self,
+        team: int,
+        index: int,
+        rng: Optional[np.random.Generator] = None,
+    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """Sample spawn position, velocity, and orientation."""
+        pos = self._get_spawn_position(team, index)
+
+        if rng is not None and self.config.spawn_position_jitter > 0:
+            jitter_xy = rng.uniform(
+                -self.config.spawn_position_jitter,
+                self.config.spawn_position_jitter,
+                size=2,
+            )
+            pos[:2] += jitter_xy
+
+        if rng is not None and self.config.spawn_altitude_jitter > 0:
+            pos[2] += rng.uniform(
+                -self.config.spawn_altitude_jitter,
+                self.config.spawn_altitude_jitter,
+            )
+            pos[2] = np.clip(pos[2], self.config.arena_height_min, self.config.arena_height_max)
+
+        base_yaw = 0.0 if team == 0 else np.pi
+        yaw = base_yaw
+        if rng is not None and self.config.spawn_heading_jitter > 0:
+            yaw += rng.uniform(-self.config.spawn_heading_jitter, self.config.spawn_heading_jitter)
+
+        orientation = np.array([0.0, 0.0, yaw])
+
+        speed = self.config.min_speed * 1.5
+        if rng is not None and self.config.spawn_speed_jitter > 0:
+            jitter = rng.uniform(-self.config.spawn_speed_jitter, self.config.spawn_speed_jitter)
+            speed *= (1.0 + jitter)
+        speed = max(speed, self.config.min_speed)
+
+        heading = np.array([np.cos(yaw), np.sin(yaw), 0.0])
+        velocity = heading * speed
+
+        return pos, velocity, orientation
 
     def _create_weapons(self) -> List[Weapon]:
         """Create weapon loadout for a drone."""
@@ -383,13 +430,14 @@ class DogfightEnv(gym.Env):
 
         # Reset all drones
         for drone_id, drone in self.drones.items():
-            spawn_pos = self._get_spawn_position(drone.team, drone_id % max(self.config.num_red, self.config.num_blue))
-            spawn_vel = np.array([
-                self.config.min_speed * 1.5 * (1 if drone.team == 0 else -1),
-                0, 0
-            ])
+            spawn_pos, spawn_vel, spawn_orient = self._sample_spawn_state(
+                drone.team,
+                drone_id % max(self.config.num_red, self.config.num_blue),
+                rng=self.np_random,
+            )
             drone.respawn(spawn_pos, spawn_vel)
-            drone.orientation = np.array([0, 0, 0 if drone.team == 0 else np.pi])
+            drone.orientation = spawn_orient
+            drone.angular_velocity = np.zeros(3)
             drone.kills = 0
             drone.deaths = 0
             drone.damage_dealt = 0
@@ -419,6 +467,15 @@ class DogfightEnv(gym.Env):
         # Get agent drone
         agent = self.drones[self.agent_drone_id]
 
+        # Reset per-step flags
+        for drone in self.drones.values():
+            drone._boundary_violation = False
+            drone._crashed = False
+            drone._shots_fired_this_step = 0
+            drone._missiles_fired_this_step = 0
+            drone.locked_target = None
+            drone.locked_by = []
+
         # Apply agent's action
         if agent.is_alive:
             self._apply_action(agent, action)
@@ -437,8 +494,15 @@ class DogfightEnv(gym.Env):
         # Check boundaries and crashes
         for drone in self.drones.values():
             if drone.is_alive:
-                self._check_boundaries(drone)
-                self._check_altitude(drone)
+                boundary_events = self._check_boundaries(drone)
+                if boundary_events:
+                    combat_events.extend(boundary_events)
+                    self.combat_log.extend(boundary_events)
+
+                altitude_events = self._check_altitude(drone)
+                if altitude_events:
+                    combat_events.extend(altitude_events)
+                    self.combat_log.extend(altitude_events)
 
         # Update match time
         self.match_time += self.dt
@@ -743,7 +807,13 @@ class DogfightEnv(gym.Env):
             if weapon.lock_required:
                 # Simplified lock check
                 to_target = target.position - drone.position
-                heading = np.array([np.cos(drone.orientation[2]), np.sin(drone.orientation[2]), 0])
+                yaw = drone.orientation[2]
+                pitch = drone.orientation[1]
+                heading = np.array([
+                    np.cos(yaw) * np.cos(pitch),
+                    np.sin(yaw) * np.cos(pitch),
+                    np.sin(pitch)
+                ])
                 alignment = np.dot(heading, to_target / (distance + 1e-6))
 
                 if alignment < 0.95:  # Need 95% alignment
@@ -751,11 +821,18 @@ class DogfightEnv(gym.Env):
                     continue
 
                 weapon.current_lock += self.dt
+                drone.locked_target = target.drone_id
+                if drone.drone_id not in target.locked_by:
+                    target.locked_by.append(drone.drone_id)
                 if weapon.current_lock < weapon.lock_time:
                     continue
 
             # Fire weapon
             if weapon.fire():
+                drone._shots_fired_this_step += 1
+                if weapon.weapon_type in [WeaponType.MISSILE_IR, WeaponType.MISSILE_RADAR]:
+                    drone._missiles_fired_this_step += 1
+
                 # Calculate hit probability based on distance and alignment
                 to_target = target.position - drone.position
                 yaw = drone.orientation[2]
@@ -779,7 +856,9 @@ class DogfightEnv(gym.Env):
                 elif weapon.weapon_type == WeaponType.GUN:
                     hit_prob *= 0.6  # Better gun accuracy for more action
 
-                hit = np.random.random() < hit_prob
+                rng = getattr(self, "np_random", None)
+                rand = rng.random() if rng is not None else np.random.random()
+                hit = rand < hit_prob
 
                 self.episode_stats["shots_fired"] += 1
                 if weapon.weapon_type in [WeaponType.MISSILE_IR, WeaponType.MISSILE_RADAR]:
@@ -813,26 +892,46 @@ class DogfightEnv(gym.Env):
 
                         # Respawn if enabled
                         if self.config.respawn_enabled:
-                            spawn_pos = self._get_spawn_position(
+                            spawn_pos, spawn_vel, spawn_orient = self._sample_spawn_state(
                                 target.team,
-                                target.drone_id % max(self.config.num_red, self.config.num_blue)
+                                target.drone_id % max(self.config.num_red, self.config.num_blue),
+                                rng=self.np_random,
                             )
-                            spawn_vel = np.array([
-                                self.config.min_speed * 1.5 * (1 if target.team == 0 else -1),
-                                0, 0
-                            ])
                             target.respawn(spawn_pos, spawn_vel)
+                            target.orientation = spawn_orient
+                            target.angular_velocity = np.zeros(3)
+                            respawn_event = {
+                                "type": "respawn",
+                                "attacker": target.drone_id,
+                                "target": target.drone_id,
+                                "weapon": weapon.weapon_type.value,
+                                "damage": 0.0,
+                                "distance": distance,
+                            }
+                            events.append(respawn_event)
+                            self.combat_log.append(respawn_event)
 
                     events.append(event)
                     self.combat_log.append(event)
+                elif weapon.weapon_type in [WeaponType.MISSILE_IR, WeaponType.MISSILE_RADAR]:
+                    events.append({
+                        "type": "miss",
+                        "attacker": drone.drone_id,
+                        "target": target.drone_id,
+                        "weapon": weapon.weapon_type.value,
+                        "damage": 0.0,
+                        "distance": distance,
+                    })
 
         return events
 
-    def _check_boundaries(self, drone: CombatDrone):
+    def _check_boundaries(self, drone: CombatDrone) -> List[Dict[str, Any]]:
         """Check if drone is out of bounds and enforce hard limits."""
+        events: List[Dict[str, Any]] = []
         pos = drone.position
         half_size = self.config.arena_size / 2
         warning_zone = half_size * 0.9  # 90% of boundary
+        hard_violation = False
 
         # Soft boundary - warn and turn back
         if abs(pos[0]) > warning_zone or abs(pos[1]) > warning_zone:
@@ -842,6 +941,7 @@ class DogfightEnv(gym.Env):
 
         # Hard boundary - enforce strict limits
         if abs(pos[0]) > half_size:
+            hard_violation = True
             drone.take_damage(5)
             drone.velocity[0] *= -0.8
             drone.position[0] = np.sign(pos[0]) * (half_size - 50)
@@ -849,6 +949,7 @@ class DogfightEnv(gym.Env):
             drone.orientation[2] = np.arctan2(-pos[1], -pos[0])
 
         if abs(pos[1]) > half_size:
+            hard_violation = True
             drone.take_damage(5)
             drone.velocity[1] *= -0.8
             drone.position[1] = np.sign(pos[1]) * (half_size - 50)
@@ -858,31 +959,82 @@ class DogfightEnv(gym.Env):
         # Absolute hard limit - teleport back if somehow escaped
         max_distance = half_size * 1.2
         if abs(pos[0]) > max_distance or abs(pos[1]) > max_distance:
+            hard_violation = True
             drone.position[0] = np.clip(drone.position[0], -half_size + 100, half_size - 100)
             drone.position[1] = np.clip(drone.position[1], -half_size + 100, half_size - 100)
             drone.velocity[:2] = drone.velocity[:2] * 0.5  # Slow down
 
-    def _check_altitude(self, drone: CombatDrone):
+        if hard_violation:
+            drone._boundary_violation = True
+            events.append({
+                "type": "out_of_bounds",
+                "attacker": drone.drone_id,
+                "target": drone.drone_id,
+                "weapon": "gun",
+                "damage": 0.0,
+                "distance": 0.0,
+            })
+
+            if not drone.is_alive and self.config.respawn_enabled:
+                spawn_pos, spawn_vel, spawn_orient = self._sample_spawn_state(
+                    drone.team,
+                    drone.drone_id % max(self.config.num_red, self.config.num_blue),
+                    rng=self.np_random,
+                )
+                drone.respawn(spawn_pos, spawn_vel)
+                drone.orientation = spawn_orient
+                drone.angular_velocity = np.zeros(3)
+                events.append({
+                    "type": "respawn",
+                    "attacker": drone.drone_id,
+                    "target": drone.drone_id,
+                    "weapon": "gun",
+                    "damage": 0.0,
+                    "distance": 0.0,
+                })
+
+        return events
+
+    def _check_altitude(self, drone: CombatDrone) -> List[Dict[str, Any]]:
         """Check altitude limits."""
+        events: List[Dict[str, Any]] = []
         if drone.position[2] < self.config.arena_height_min:
             # Crashed
             drone.is_alive = False
             drone.deaths += 1
+            drone._crashed = True
+            events.append({
+                "type": "crash",
+                "attacker": drone.drone_id,
+                "target": drone.drone_id,
+                "weapon": "gun",
+                "damage": 0.0,
+                "distance": 0.0,
+            })
 
             if self.config.respawn_enabled:
-                spawn_pos = self._get_spawn_position(
+                spawn_pos, spawn_vel, spawn_orient = self._sample_spawn_state(
                     drone.team,
-                    drone.drone_id % max(self.config.num_red, self.config.num_blue)
+                    drone.drone_id % max(self.config.num_red, self.config.num_blue),
+                    rng=self.np_random,
                 )
-                spawn_vel = np.array([
-                    self.config.min_speed * 1.5 * (1 if drone.team == 0 else -1),
-                    0, 0
-                ])
                 drone.respawn(spawn_pos, spawn_vel)
+                drone.orientation = spawn_orient
+                drone.angular_velocity = np.zeros(3)
+                events.append({
+                    "type": "respawn",
+                    "attacker": drone.drone_id,
+                    "target": drone.drone_id,
+                    "weapon": "gun",
+                    "damage": 0.0,
+                    "distance": 0.0,
+                })
 
         elif drone.position[2] > self.config.arena_height_max:
             drone.velocity[2] = -abs(drone.velocity[2])
             drone.position[2] = self.config.arena_height_max - 10
+
+        return events
 
     def _calculate_reward(self, agent: CombatDrone, events: List[Dict[str, Any]]) -> float:
         """Calculate reward for the agent."""
@@ -904,6 +1056,19 @@ class DogfightEnv(gym.Env):
                 if event["type"] == "kill":
                     reward += self.config.reward_death
                     self.episode_stats["deaths"] += 1
+                elif event["type"] == "miss":
+                    reward += self.config.reward_evasion
+
+        # Firing penalty
+        shots_fired = getattr(agent, "_shots_fired_this_step", 0)
+        if shots_fired:
+            reward += self.config.reward_fire * shots_fired
+
+        # Boundary and crash penalties
+        if getattr(agent, "_boundary_violation", False):
+            reward += self.config.reward_out_of_bounds
+        if getattr(agent, "_crashed", False):
+            reward += self.config.reward_out_of_bounds
 
         # Pursuit reward - getting closer to enemies
         enemies = [d for d in self.drones.values() if d.team != agent.team and d.is_alive]
@@ -926,15 +1091,17 @@ class DogfightEnv(gym.Env):
         truncated = False
 
         # Time limit
-        if self.match_time >= self.config.max_match_time:
-            truncated = True
+        if self.config.max_match_time is not None and self.config.max_match_time > 0:
+            if self.match_time >= self.config.max_match_time:
+                truncated = True
 
         # Win conditions
         if self.config.win_condition == "kills":
-            if self.red_kills >= self.config.kills_to_win:
-                terminated = True
-            elif self.blue_kills >= self.config.kills_to_win:
-                terminated = True
+            if self.config.kills_to_win is not None and self.config.kills_to_win > 0:
+                if self.red_kills >= self.config.kills_to_win:
+                    terminated = True
+                elif self.blue_kills >= self.config.kills_to_win:
+                    terminated = True
 
         elif self.config.win_condition == "last_alive":
             red_alive = sum(1 for d in self.drones.values() if d.team == 0 and d.is_alive)
@@ -1045,6 +1212,29 @@ def create_1v1_dogfight(render_mode: Optional[str] = None) -> DogfightEnv:
         respawn_enabled=True,
         kills_to_win=5,
         max_match_time=180.0,
+        spawn_position_jitter=150.0,
+        spawn_altitude_jitter=100.0,
+        spawn_heading_jitter=np.radians(10),
+        spawn_speed_jitter=0.1,
+        reward_fire=-0.05,
+    )
+    return DogfightEnv(config=config, render_mode=render_mode)
+
+
+def create_endless_1v1(render_mode: Optional[str] = None) -> DogfightEnv:
+    """Create an endless 1v1 dogfight (no time or kill limit)."""
+    config = DogfightConfig(
+        num_red=1,
+        num_blue=1,
+        arena_size=2000.0,
+        respawn_enabled=True,
+        kills_to_win=None,
+        max_match_time=None,
+        spawn_position_jitter=150.0,
+        spawn_altitude_jitter=100.0,
+        spawn_heading_jitter=np.radians(10),
+        spawn_speed_jitter=0.1,
+        reward_fire=-0.05,
     )
     return DogfightEnv(config=config, render_mode=render_mode)
 

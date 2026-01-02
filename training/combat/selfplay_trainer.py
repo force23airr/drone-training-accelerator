@@ -347,6 +347,7 @@ class OpponentPool:
         agent_id: str,
         opponent_id: str,
         agent_score: float,
+        agent_elo: Optional[float] = None,
         k_factor: float = 32.0,
     ) -> Tuple[float, float]:
         """
@@ -356,6 +357,7 @@ class OpponentPool:
             agent_id: Agent identifier
             opponent_id: Opponent identifier
             agent_score: 1.0 for win, 0.5 for draw, 0.0 for loss
+            agent_elo: Current agent Elo rating (defaults to 1500)
             k_factor: Elo K-factor
 
         Returns:
@@ -365,7 +367,8 @@ class OpponentPool:
             return 0.0, 0.0
 
         opponent = self.opponents[opponent_id]
-        agent_elo = 1500.0  # Default for new agent
+        if agent_elo is None:
+            agent_elo = 1500.0  # Default for new agent
 
         # Expected score
         expected_agent = 1 / (1 + 10 ** ((opponent.elo_rating - agent_elo) / 400))
@@ -485,6 +488,7 @@ class SelfPlayCallback(BaseCallback):
                     "agent",
                     self.current_opponent.opponent_id,
                     score,
+                    agent_elo=self.agent_elo,
                 )
                 self.agent_elo += delta
 
@@ -1007,6 +1011,11 @@ def train_1v1(output_dir: str = "1v1_training", hours: float = 24):
         num_blue=1,
         respawn_enabled=True,
         kills_to_win=5,
+        spawn_position_jitter=150.0,
+        spawn_altitude_jitter=100.0,
+        spawn_heading_jitter=np.radians(10),
+        spawn_speed_jitter=0.1,
+        reward_fire=-0.05,
     )
     return train_dogfight(output_dir, hours=hours, config=config)
 
