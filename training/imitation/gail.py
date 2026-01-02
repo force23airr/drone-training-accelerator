@@ -206,6 +206,96 @@ class StateOnlyDiscriminator(nn.Module):
         return reward.squeeze(-1)
 
 
+class GAILRewardWrapper:
+    """
+    Environment wrapper that replaces native rewards with GAIL discriminator rewards.
+
+    This is the key to making GAIL work - the policy learns to maximize
+    the discriminator's reward signal, not the environment's native reward.
+    """
+
+    def __init__(self, env, discriminator, state_only: bool = False):
+        """
+        Args:
+            env: The environment to wrap
+            discriminator: GAIL discriminator (Discriminator or StateOnlyDiscriminator)
+            state_only: Whether discriminator uses state transitions only
+        """
+        self.env = env
+        self.discriminator = discriminator
+        self.state_only = state_only
+        self._last_obs = None
+
+        # Forward gym attributes
+        self.observation_space = env.observation_space
+        self.action_space = env.action_space
+        self.metadata = getattr(env, 'metadata', {})
+        self.spec = getattr(env, 'spec', None)
+
+    def reset(self, **kwargs):
+        """Reset environment and store initial observation."""
+        result = self.env.reset(**kwargs)
+        if isinstance(result, tuple):
+            obs, info = result
+        else:
+            obs, info = result, {}
+        self._last_obs = obs
+        return obs, info
+
+    def step(self, action):
+        """Step environment and replace reward with GAIL reward."""
+        obs, env_reward, terminated, truncated, info = self.env.step(action)
+
+        # Compute GAIL reward from discriminator
+        gail_reward = self._compute_gail_reward(self._last_obs, action, obs)
+
+        # Store original reward for logging/debugging
+        info['env_reward'] = env_reward
+        info['gail_reward'] = gail_reward
+
+        # Update last observation for next step
+        self._last_obs = obs
+
+        return obs, gail_reward, terminated, truncated, info
+
+    def _compute_gail_reward(
+        self,
+        obs: np.ndarray,
+        action: np.ndarray,
+        next_obs: np.ndarray,
+    ) -> float:
+        """Compute GAIL reward from discriminator."""
+        self.discriminator.eval()
+
+        # Get device from discriminator
+        device = next(self.discriminator.parameters()).device
+
+        # Prepare tensors
+        obs_t = torch.FloatTensor(obs).unsqueeze(0).to(device)
+        next_obs_t = torch.FloatTensor(next_obs).unsqueeze(0).to(device)
+
+        with torch.no_grad():
+            if self.state_only:
+                reward = self.discriminator.compute_reward(obs_t, next_obs_t)
+            else:
+                action_t = torch.FloatTensor(action).unsqueeze(0).to(device)
+                reward = self.discriminator.compute_reward(obs_t, action_t)
+
+        return float(reward.cpu().numpy()[0])
+
+    def render(self, *args, **kwargs):
+        """Forward render calls to wrapped environment."""
+        return self.env.render(*args, **kwargs)
+
+    def close(self):
+        """Close the wrapped environment."""
+        return self.env.close()
+
+    def __getattr__(self, name):
+        """Forward unknown attributes to wrapped environment."""
+        return getattr(self.env, name)
+
+
 class GAIL:
     """
     Generative Adversarial Imitation Learning trainer.
@@ -255,7 +345,7 @@ class GAIL:
         else:
             self.device = torch.device(device)
 
-        self.env = env
+        self.env = env  # Original environment (for rollout collection)
         self.expert_dataset = expert_dataset
         self.batch_size = batch_size
         self.n_discriminator_updates = n_discriminator_updates
@@ -284,6 +374,14 @@ class GAIL:
             lr=discriminator_lr,
         )
 
+        # Create wrapped environment that uses GAIL rewards
+        # This is the key fix - PPO will now train on discriminator rewards
+        self.wrapped_env = GAILRewardWrapper(
+            env=env,
+            discriminator=self.discriminator,
+            state_only=state_only,
+        )
+
         # Create policy (using PPO from stable-baselines3)
         self._init_policy(policy_lr, clip_range, entropy_coef)
 
@@ -297,12 +395,13 @@ class GAIL:
         self.policy_accuracy: List[float] = []
 
     def _init_policy(self, lr: float, clip_range: float, entropy_coef: float):
-        """Initialize the policy using PPO."""
+        """Initialize the policy using PPO with wrapped environment."""
         from stable_baselines3 import PPO
 
+        # Use wrapped environment so PPO trains on GAIL rewards
         self.policy_model = PPO(
             "MlpPolicy",
-            self.env,
+            self.wrapped_env,  # Key change: use wrapped env with GAIL rewards
             learning_rate=lr,
             clip_range=clip_range,
             ent_coef=entropy_coef,
@@ -473,21 +572,24 @@ class GAIL:
         """
         Train GAIL.
 
-        Alternates between:
-        1. Collecting policy rollouts
-        2. Computing GAIL rewards
-        3. Updating discriminator
-        4. Updating policy with GAIL rewards
+        Training loop alternates between:
+        1. Collecting policy rollouts (for discriminator training)
+        2. Updating discriminator to distinguish expert vs policy
+        3. Updating policy via PPO using GAIL rewards from wrapped environment
+
+        The wrapped environment (self.wrapped_env) automatically replaces
+        environment rewards with discriminator-computed GAIL rewards during
+        PPO's internal rollout collection.
 
         Args:
             total_timesteps: Total environment steps
-            rollout_steps: Steps per rollout
-            n_epochs: PPO epochs per update
+            rollout_steps: Steps per rollout for discriminator training
+            n_epochs: PPO epochs per update (not used - PPO uses its defaults)
             verbose: Print progress
-            callback: Optional callback
+            callback: Optional callback(iteration, disc_stats, mean_reward)
 
         Returns:
-            Training history
+            Training history dict with timesteps, losses, rewards, accuracies
         """
         if verbose:
             print("=" * 60)
@@ -497,6 +599,7 @@ class GAIL:
             print(f"  Total timesteps: {total_timesteps}")
             print(f"  Device: {self.device}")
             print(f"  State-only mode: {self.state_only}")
+            print(f"  Reward injection: Enabled (via GAILRewardWrapper)")
 
         history = {
             'timesteps': [],
@@ -512,14 +615,16 @@ class GAIL:
         while timesteps_done < total_timesteps:
             iteration += 1
 
-            # Collect rollout from policy
+            # Step 1: Collect rollout from current policy for discriminator training
+            # This uses the original environment to get (s, a, s') tuples
             obs, acts, next_obs = self.collect_policy_rollout(rollout_steps)
             timesteps_done += rollout_steps
 
-            # Update discriminator
+            # Step 2: Update discriminator to better distinguish expert vs policy
             disc_stats = self.update_discriminator(obs, acts, next_obs)
 
-            # Compute GAIL rewards
+            # Compute GAIL rewards for logging/monitoring
+            # (The actual reward injection happens in GAILRewardWrapper during PPO's rollout)
             gail_rewards = self.compute_gail_rewards(obs, acts, next_obs)
             mean_reward = np.mean(gail_rewards)
 
@@ -530,22 +635,30 @@ class GAIL:
             history['expert_accuracy'].append(disc_stats['expert_accuracy'])
             history['policy_accuracy'].append(disc_stats['policy_accuracy'])
 
-            # Update policy with GAIL rewards
-            # Note: This is simplified - full implementation would
-            # inject GAIL rewards into the PPO training loop
-            self.policy_model.learn(total_timesteps=rollout_steps, reset_num_timesteps=False)
+            # Step 3: Update policy using GAIL rewards
+            # PPO collects its own rollouts using self.wrapped_env, which
+            # automatically computes GAIL rewards via the discriminator
+            self.policy_model.learn(
+                total_timesteps=rollout_steps,
+                reset_num_timesteps=False,
+            )
 
             if verbose and iteration % 10 == 0:
                 print(f"  Iter {iteration}: steps={timesteps_done}, "
                       f"disc_loss={disc_stats['discriminator_loss']:.4f}, "
-                      f"mean_reward={mean_reward:.4f}, "
-                      f"expert_acc={disc_stats['expert_accuracy']:.2f}")
+                      f"mean_gail_reward={mean_reward:.4f}, "
+                      f"expert_acc={disc_stats['expert_accuracy']:.2f}, "
+                      f"policy_acc={disc_stats['policy_accuracy']:.2f}")
 
             if callback:
                 callback(iteration, disc_stats, mean_reward)
 
         if verbose:
+            print("=" * 60)
             print("GAIL training complete!")
+            print(f"  Final discriminator loss: {history['discriminator_losses'][-1]:.4f}")
+            print(f"  Final mean GAIL reward: {history['mean_rewards'][-1]:.4f}")
+            print("=" * 60)
 
         return history
 
