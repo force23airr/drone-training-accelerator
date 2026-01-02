@@ -8,6 +8,7 @@ Features:
 - TorchScript export for C++/embedded systems
 - ROS2 bridge for real-time control
 - Hardware configuration profiles
+- AirSim integration for visualization
 """
 
 from deployment.model_export import (
@@ -28,6 +29,18 @@ try:
 except ImportError:
     ROS2_AVAILABLE = False
 
+# AirSim military environments
+from deployment.airsim import (
+    MilitaryEnvironmentType,
+    MilitaryAirSimConfig,
+    MILITARY_ENVIRONMENT_CONFIGS,
+    get_military_environment,
+    get_carrier_environment,
+    get_airbase_environment,
+    get_contested_airspace,
+    get_urban_strike_zone,
+)
+
 __all__ = [
     # Model export
     "PolicyExporter",
@@ -36,6 +49,15 @@ __all__ = [
     "export_model_to_torchscript",
     # ROS2 (conditional)
     "ROS2_AVAILABLE",
+    # AirSim
+    "MilitaryEnvironmentType",
+    "MilitaryAirSimConfig",
+    "MILITARY_ENVIRONMENT_CONFIGS",
+    "get_military_environment",
+    "get_carrier_environment",
+    "get_airbase_environment",
+    "get_contested_airspace",
+    "get_urban_strike_zone",
 ]
 
 if ROS2_AVAILABLE:

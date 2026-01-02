@@ -51,6 +51,38 @@ from training.imitation.hybrid_trainer import (
     train_from_demonstrations,
 )
 
+from training.imitation.quality import (
+    QualityScoreBreakdown,
+    ScorerConfig,
+    DemonstrationQualityScorer,
+    score_demonstrations,
+    filter_by_quality,
+    FilterResult,
+    FilterConfig,
+    QualityFilter,
+    create_strict_filter,
+    create_lenient_filter,
+)
+
+from training.imitation.splitting import (
+    SplitConfig,
+    DatasetSplit,
+    StratifiedDemoSplitter,
+    split_by_pilot_and_task,
+    validate_no_leakage,
+)
+
+from training.imitation.provenance import (
+    SCHEMA_VERSION,
+    ProcessingStep,
+    ExtractionConfig,
+    DatasetFingerprint,
+    DatasetFingerprintGenerator,
+    generate_fingerprint,
+    verify_fingerprint,
+    load_with_verification,
+)
+
 __all__ = [
     # Demonstrations
     "Demonstration",
@@ -73,4 +105,30 @@ __all__ = [
     # Hybrid training
     "HybridILRLTrainer",
     "train_from_demonstrations",
+    # Quality
+    "QualityScoreBreakdown",
+    "ScorerConfig",
+    "DemonstrationQualityScorer",
+    "score_demonstrations",
+    "filter_by_quality",
+    "FilterResult",
+    "FilterConfig",
+    "QualityFilter",
+    "create_strict_filter",
+    "create_lenient_filter",
+    # Splitting
+    "SplitConfig",
+    "DatasetSplit",
+    "StratifiedDemoSplitter",
+    "split_by_pilot_and_task",
+    "validate_no_leakage",
+    # Provenance
+    "SCHEMA_VERSION",
+    "ProcessingStep",
+    "ExtractionConfig",
+    "DatasetFingerprint",
+    "DatasetFingerprintGenerator",
+    "generate_fingerprint",
+    "verify_fingerprint",
+    "load_with_verification",
 ]
