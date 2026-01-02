@@ -1,0 +1,169 @@
+# =============================================================================
+# Docker Compose - Drone Training Accelerator
+# =============================================================================
+# Multi-service deployment for training, API, and monitoring
+#
+# Usage:
+#   Start all:     docker-compose up -d
+#   Start API:     docker-compose up api
+#   Start training: docker-compose up training
+#   View logs:     docker-compose logs -f
+#   Stop all:      docker-compose down
+# =============================================================================
+
+version: '3.8'
+
+services:
+  # ---------------------------------------------------------------------------
+  # Main API Service
+  # ---------------------------------------------------------------------------
+  api:
+    build:
+      context: .
+      target: api-server
+    image: drone-accelerator:api
+    container_name: drone-api
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./models:/app/models
+      - ./logs:/app/logs
+    environment:
+      - PYTHONUNBUFFERED=1
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # ---------------------------------------------------------------------------
+  # Training Service (GPU)
+  # ---------------------------------------------------------------------------
+  training:
+    build:
+      context: .
+      target: training
+    image: drone-accelerator:training
+    container_name: drone-training
+    volumes:
+      - ./configs:/app/configs
+      - ./models:/app/models
+      - ./logs:/app/logs
+      - ./data:/app/data
+    environment:
+      - PYTHONUNBUFFERED=1
+      - WANDB_API_KEY=${WANDB_API_KEY:-}
+      - CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-0}
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    command: ["python", "-m", "training.run", "--config", "configs/default.yaml"]
+
+  # ---------------------------------------------------------------------------
+  # PX4 SITL Service
+  # ---------------------------------------------------------------------------
+  px4-sitl:
+    build:
+      context: .
+      target: px4-sitl
+    image: drone-accelerator:px4-sitl
+    container_name: drone-px4
+    network_mode: host
+    volumes:
+      - ./models:/app/models
+    environment:
+      - PYTHONUNBUFFERED=1
+      - PX4_SIM_HOST_ADDR=127.0.0.1
+    command: ["--px4", "python", "test_px4_sitl.py"]
+
+  # ---------------------------------------------------------------------------
+  # TensorBoard Monitoring
+  # ---------------------------------------------------------------------------
+  tensorboard:
+    build:
+      context: .
+      target: final
+    image: drone-accelerator:latest
+    container_name: drone-tensorboard
+    ports:
+      - "6006:6006"
+    volumes:
+      - ./logs:/app/logs:ro
+    command: ["--tensorboard"]
+    depends_on:
+      - training
+
+  # ---------------------------------------------------------------------------
+  # Jupyter Notebook (Development)
+  # ---------------------------------------------------------------------------
+  jupyter:
+    build:
+      context: .
+      target: development
+    image: drone-accelerator:dev
+    container_name: drone-jupyter
+    ports:
+      - "8888:8888"
+    volumes:
+      - .:/app
+      - ./notebooks:/app/notebooks
+    environment:
+      - PYTHONUNBUFFERED=1
+    command: ["--jupyter"]
+
+  # ---------------------------------------------------------------------------
+  # Redis (for distributed training coordination)
+  # ---------------------------------------------------------------------------
+  redis:
+    image: redis:7-alpine
+    container_name: drone-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+
+  # ---------------------------------------------------------------------------
+  # Prometheus Metrics (optional monitoring)
+  # ---------------------------------------------------------------------------
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: drone-prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    profiles:
+      - monitoring
+
+  # ---------------------------------------------------------------------------
+  # Grafana Dashboard (optional monitoring)
+  # ---------------------------------------------------------------------------
+  grafana:
+    image: grafana/grafana:latest
+    container_name: drone-grafana
+    ports:
+      - "3000:3000"
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./monitoring/grafana:/etc/grafana/provisioning:ro
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_PASSWORD:-admin}
+    profiles:
+      - monitoring
+    depends_on:
+      - prometheus
+
+volumes:
+  redis-data:
+  prometheus-data:
+  grafana-data:
+
+networks:
+  default:
+    name: drone-network
