@@ -1,0 +1,120 @@
+# ==============================================================================
+# DRONE SPECIFICATION TEMPLATE - Quadcopter / Multirotor
+# ==============================================================================
+#
+# This template is for quadcopter and multirotor drones.
+# Can be used for racing drones, inspection drones, or combat multirotors.
+#
+# ==============================================================================
+
+identity:
+  name: "Your Quadcopter Name"
+  manufacturer: "Your Company"
+  version: "1.0.0"
+  category: "quadcopter"             # quadcopter, hexacopter, octocopter
+
+# ------------------------------------------------------------------------------
+# PHYSICAL DIMENSIONS
+# ------------------------------------------------------------------------------
+physical:
+  mass_kg: 5.0                       # (REQUIRED) Total mass including battery
+  wingspan_m: 0.5                    # (REQUIRED) Motor-to-motor diagonal distance
+  length_m: 0.5                      # (REQUIRED) Frame length
+  wing_area_m2: 0.1                  # Approximate disk area (for drag calc)
+
+  # Optional
+  height_m: 0.15
+  fuselage_diameter_m: 0.3
+
+# ------------------------------------------------------------------------------
+# PERFORMANCE ENVELOPE
+# ------------------------------------------------------------------------------
+performance:
+  max_speed_ms: 30.0                 # (REQUIRED) Maximum horizontal speed
+  cruise_speed_ms: 15.0              # (REQUIRED) Efficient cruise speed
+  stall_speed_ms: 0.0                # (REQUIRED) 0 for hover-capable drones
+  max_g_force: 4.0                   # (REQUIRED) Structural limit
+  max_altitude_m: 500.0              # AGL limit or legal limit
+
+  # Optional - multirotors have different limits
+  max_climb_rate_ms: 10.0
+  max_descent_rate_ms: 8.0
+  max_roll_rate_degs: 720.0          # Racing drones can be very agile
+  max_pitch_rate_degs: 720.0
+  max_yaw_rate_degs: 360.0
+  max_bank_angle_deg: 70.0
+
+# ------------------------------------------------------------------------------
+# PROPULSION
+# ------------------------------------------------------------------------------
+propulsion:
+  type: "electric"                   # (REQUIRED) Usually electric for multirotors
+  max_thrust_n: 80.0                 # (REQUIRED) Total thrust from all motors
+  fuel_capacity_kg: 0.5              # Battery mass
+
+  num_engines: 4                     # Number of motors
+  idle_thrust_fraction: 0.10
+
+# ------------------------------------------------------------------------------
+# CONTROL
+# For multirotors this is motor mixing, not control surfaces
+# ------------------------------------------------------------------------------
+control:
+  surface_type: "conventional"       # Not really applicable to multirotors
+
+# ------------------------------------------------------------------------------
+# INERTIA (Optional)
+# Multirotors are typically symmetric
+# ------------------------------------------------------------------------------
+inertia:
+  Ixx: 0.05                          # kg*m²
+  Iyy: 0.05                          # kg*m²
+  Izz: 0.10                          # kg*m²
+
+# ------------------------------------------------------------------------------
+# PAYLOAD
+# ------------------------------------------------------------------------------
+payload:
+  capacity_kg: 2.0
+  hardpoints: 1                      # Typically just a payload mount
+  internal_bay: false
+
+  # Example: Small drone weapon
+  weapons:
+    - type: "gun"
+      quantity: 1
+      ammo: 100
+      range_m: 50
+      damage: 5
+      cooldown_s: 0.2
+      mass_kg: 0.5
+
+# ------------------------------------------------------------------------------
+# SENSORS
+# ------------------------------------------------------------------------------
+sensors:
+  radar_range_km: 0.0                # Usually no radar on small drones
+  irst: false
+  rwr: false
+  datalink_range_km: 5.0
+
+# ------------------------------------------------------------------------------
+# CAPABILITIES
+# ------------------------------------------------------------------------------
+capabilities:
+  carrier_capable: false
+  catapult_launch: false
+  arrested_landing: false
+  autonomous: true
+  swarm: true                        # Multirotors often swarm-capable
+  stealth: false
+  all_weather: false                 # Most consumer drones aren't all-weather
+
+notes: |
+  Template for quadcopter/multirotor drones.
+  Adjust mass and thrust for your specific motors.
+
+tags:
+  - quadcopter
+  - multirotor
+  - electric

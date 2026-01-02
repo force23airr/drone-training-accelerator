@@ -1,0 +1,177 @@
+# ==============================================================================
+# DRONE SPECIFICATION TEMPLATE - Fixed Wing Combat UAV
+# ==============================================================================
+#
+# This template is for fixed-wing combat drones (UCAV/UCAS).
+# Fill in your drone's specifications below.
+#
+# REQUIRED fields are marked with (REQUIRED)
+# OPTIONAL fields can be left as-is or removed
+#
+# Units:
+#   - Mass: kg
+#   - Length/Distance: meters
+#   - Speed: m/s (meters per second)
+#   - Thrust: N (Newtons)
+#   - Angles: degrees
+#
+# ==============================================================================
+
+# ------------------------------------------------------------------------------
+# IDENTITY
+# ------------------------------------------------------------------------------
+identity:
+  name: "Your Drone Name"           # (REQUIRED) e.g., "Acme X-100 Combat Drone"
+  manufacturer: "Your Company"       # Your company name
+  version: "1.0.0"                   # Specification version
+  category: "fixed_wing"             # fixed_wing, quadcopter, vtol, etc.
+
+# ------------------------------------------------------------------------------
+# PHYSICAL DIMENSIONS (REQUIRED)
+# These are the basic measurements of your drone
+# ------------------------------------------------------------------------------
+physical:
+  mass_kg: 500.0                     # (REQUIRED) Total takeoff mass in kg
+  wingspan_m: 10.0                   # (REQUIRED) Wingtip to wingtip in meters
+  length_m: 8.0                      # (REQUIRED) Nose to tail in meters
+  wing_area_m2: 15.0                 # (REQUIRED) Wing planform area in m²
+
+  # Optional dimensions
+  height_m: 2.5                      # Overall height
+  fuselage_diameter_m: 1.2           # Fuselage width/diameter
+
+# ------------------------------------------------------------------------------
+# PERFORMANCE ENVELOPE (REQUIRED)
+# These define your drone's flight capabilities
+# ------------------------------------------------------------------------------
+performance:
+  max_speed_ms: 250.0                # (REQUIRED) Maximum level flight speed (m/s)
+  cruise_speed_ms: 180.0             # (REQUIRED) Efficient cruise speed (m/s)
+  stall_speed_ms: 45.0               # (REQUIRED) Minimum flight speed (m/s)
+  max_g_force: 7.0                   # (REQUIRED) Structural g-limit (positive)
+  max_altitude_m: 12000.0            # Service ceiling in meters
+
+  # Optional performance limits
+  min_g_force: -3.0                  # Negative g limit
+  max_climb_rate_ms: 50.0            # Maximum climb rate (m/s)
+  max_roll_rate_degs: 180.0          # Maximum roll rate (deg/s)
+  max_pitch_rate_degs: 60.0          # Maximum pitch rate (deg/s)
+  max_bank_angle_deg: 80.0           # Maximum bank angle
+
+# ------------------------------------------------------------------------------
+# PROPULSION (REQUIRED)
+# Your drone's engine/motor specifications
+# ------------------------------------------------------------------------------
+propulsion:
+  type: "jet"                        # (REQUIRED) jet, turboprop, turbofan, electric, piston
+  max_thrust_n: 25000.0              # (REQUIRED) Maximum thrust in Newtons
+  fuel_capacity_kg: 200.0            # Fuel or battery capacity in kg
+
+  # Optional propulsion details
+  num_engines: 1                     # Number of engines
+  idle_thrust_fraction: 0.05         # Thrust at idle (0-1)
+  sfc: 0.00008                       # Specific fuel consumption kg/(N*s)
+  thrust_vectoring: false            # Has thrust vectoring
+  afterburner: false                 # Has afterburner
+  afterburner_thrust_ratio: 1.5      # Afterburner thrust multiplier
+
+# ------------------------------------------------------------------------------
+# CONTROL SURFACES
+# How your drone is controlled
+# ------------------------------------------------------------------------------
+control:
+  surface_type: "conventional"       # conventional, elevon, v_tail, delta, canard
+
+  # Optional control limits (degrees)
+  aileron_max_deg: 25.0
+  elevator_max_deg: 25.0
+  rudder_max_deg: 30.0
+  has_speedbrake: true
+  has_slats: false                   # Leading edge slats
+
+# ------------------------------------------------------------------------------
+# INERTIA (Optional)
+# Moments of inertia - will be estimated from geometry if not provided
+# ------------------------------------------------------------------------------
+inertia:
+  Ixx: 5000.0                        # Roll moment of inertia (kg*m²)
+  Iyy: 15000.0                       # Pitch moment of inertia (kg*m²)
+  Izz: 18000.0                       # Yaw moment of inertia (kg*m²)
+
+# ------------------------------------------------------------------------------
+# AERODYNAMICS (Optional - for advanced users)
+# Provide these if you have wind tunnel or CFD data
+# Otherwise they will be estimated from geometry
+# ------------------------------------------------------------------------------
+# aerodynamics:
+#   CL_0: 0.15                       # Zero-alpha lift coefficient
+#   CL_alpha: 5.5                    # Lift curve slope (/rad)
+#   CL_max: 1.4                      # Maximum lift coefficient
+#   CD_0: 0.020                      # Zero-lift drag coefficient
+#   oswald_efficiency: 0.80          # Oswald span efficiency
+#   Cm_alpha: -0.5                   # Pitch stability derivative
+#   Cn_beta: 0.10                    # Yaw stability derivative
+#   Cl_beta: -0.05                   # Dihedral effect
+
+# ------------------------------------------------------------------------------
+# PAYLOAD & WEAPONS
+# Combat payload specifications
+# ------------------------------------------------------------------------------
+payload:
+  capacity_kg: 500.0                 # Maximum payload mass
+  hardpoints: 4                      # Number of weapon hardpoints
+  internal_bay: false                # Has internal weapons bay
+
+  # Weapon loadout
+  weapons:
+    - type: "gun"
+      quantity: 1
+      ammo: 500
+      range_m: 300
+      damage: 10
+      cooldown_s: 0.1
+      mass_kg: 100
+
+    - type: "missile_ir"
+      quantity: 4
+      ammo: 4
+      range_m: 2000
+      damage: 100
+      cooldown_s: 2.0
+      mass_kg: 50
+
+# ------------------------------------------------------------------------------
+# SENSORS (Optional)
+# Sensor suite specifications
+# ------------------------------------------------------------------------------
+sensors:
+  radar_range_km: 100.0              # Radar detection range
+  irst: true                         # Infrared Search & Track
+  rwr: true                          # Radar Warning Receiver
+  datalink_range_km: 500.0           # Data link range
+
+# ------------------------------------------------------------------------------
+# SPECIAL CAPABILITIES (Optional)
+# Special features and capabilities
+# ------------------------------------------------------------------------------
+capabilities:
+  carrier_capable: false             # Can operate from aircraft carriers
+  catapult_launch: false             # Can be catapult launched
+  arrested_landing: false            # Can do arrested landing
+  autonomous: true                   # Autonomous flight capable
+  swarm: false                       # Swarm operations capable
+  stealth: false                     # Has stealth features
+  all_weather: true                  # All-weather capable
+
+# ------------------------------------------------------------------------------
+# NOTES
+# Any additional information about your drone
+# ------------------------------------------------------------------------------
+notes: |
+  This is a template for a fixed-wing combat UAV.
+  Replace these values with your actual drone specifications.
+
+tags:
+  - combat
+  - fixed-wing
+  - jet

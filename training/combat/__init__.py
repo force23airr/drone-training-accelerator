@@ -33,6 +33,17 @@ from .combat_analytics import (
     analyze_training_run,
 )
 
+from .drone_memory import (
+    DroneMemoryDB,
+    DroneStats,
+    MistakeRecord,
+    AchievementRecord,
+    ManeuverStats,
+    OpponentModel,
+    MistakeType,
+    AchievementType,
+)
+
 __all__ = [
     # Self-play training
     "ContinuousDogfightTrainer",
@@ -53,4 +64,13 @@ __all__ = [
     "ManeuverRecord",
     "StrategyProfile",
     "analyze_training_run",
+    # Drone memory
+    "DroneMemoryDB",
+    "DroneStats",
+    "MistakeRecord",
+    "AchievementRecord",
+    "ManeuverStats",
+    "OpponentModel",
+    "MistakeType",
+    "AchievementType",
 ]

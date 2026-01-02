@@ -21,6 +21,7 @@ from gymnasium import spaces
 import gymnasium as gym
 
 from simulation.environments.combat.base_fixed_wing_env import BaseFixedWingEnv
+from simulation.environments.combat.maneuvers import CombatAI, ManeuverType
 
 
 class WeaponType(Enum):
@@ -225,6 +226,7 @@ class DogfightEnv(gym.Env):
 
         # Initialize drones
         self.drones: Dict[int, CombatDrone] = {}
+        self.combat_ais: Dict[int, CombatAI] = {}  # Tactical AI for each drone
         self._init_drones()
 
         # Get the learning agent
@@ -258,7 +260,7 @@ class DogfightEnv(gym.Env):
         }
 
     def _init_drones(self):
-        """Initialize all drones for combat."""
+        """Initialize all drones for combat with tactical AI."""
         drone_id = 0
 
         # Red team
@@ -276,6 +278,8 @@ class DogfightEnv(gym.Env):
                 weapons=self._create_weapons(),
             )
             self.drones[drone_id] = drone
+            # Create tactical AI for this drone
+            self.combat_ais[drone_id] = CombatAI(drone_id, team=0)
             drone_id += 1
 
         # Blue team
@@ -293,6 +297,8 @@ class DogfightEnv(gym.Env):
                 weapons=self._create_weapons(),
             )
             self.drones[drone_id] = drone
+            # Create tactical AI for this drone
+            self.combat_ais[drone_id] = CombatAI(drone_id, team=1)
             drone_id += 1
 
     def _get_spawn_position(self, team: int, index: int) -> np.ndarray:
@@ -470,27 +476,71 @@ class DogfightEnv(gym.Env):
         drone._target_idx = target_idx
 
     def _step_opponents(self):
-        """Step all opponent drones using opponent policy."""
-        if self.opponent_policy is None:
-            # Simple AI if no policy provided
-            for drone in self.drones.values():
-                if drone.drone_id != self.agent_drone_id and drone.is_alive:
-                    action = self._simple_ai_action(drone)
-                    self._apply_action(drone, action)
-        else:
-            # Use provided policy
-            for drone in self.drones.values():
-                if drone.drone_id != self.agent_drone_id and drone.is_alive:
-                    obs = self._get_observation_for_drone(drone)
-                    action, _ = self.opponent_policy.predict(obs, deterministic=False)
-                    self._apply_action(drone, action)
+        """Step all opponent drones using tactical CombatAI."""
+        for drone in self.drones.values():
+            if drone.drone_id == self.agent_drone_id:
+                continue
+            if not drone.is_alive:
+                continue
+
+            if self.opponent_policy is not None:
+                # Use provided RL policy
+                obs = self._get_observation_for_drone(drone)
+                action, _ = self.opponent_policy.predict(obs, deterministic=False)
+            else:
+                # Use tactical CombatAI for realistic dogfighting
+                action, maneuver_name = self._get_tactical_action(drone)
+                # Store current maneuver for visualization
+                drone._current_maneuver = maneuver_name
+
+            self._apply_action(drone, action)
+
+    def _get_tactical_action(self, drone: CombatDrone) -> Tuple[np.ndarray, str]:
+        """Get tactical action from CombatAI for a drone."""
+        combat_ai = self.combat_ais.get(drone.drone_id)
+        if combat_ai is None:
+            return self._simple_ai_action(drone), ""
+
+        # Gather enemy and ally data
+        enemies = []
+        allies = []
+        for d in self.drones.values():
+            if not d.is_alive:
+                continue
+            data = {
+                'id': d.drone_id,
+                'pos': d.position.copy(),
+                'vel': d.velocity.copy(),
+                'health': d.health,
+            }
+            if d.team != drone.team:
+                enemies.append(data)
+            elif d.drone_id != drone.drone_id:
+                allies.append(data)
+
+        # Get action from combat AI
+        action, maneuver_name = combat_ai.get_action(
+            current_time=self.match_time,
+            drone_pos=drone.position,
+            drone_vel=drone.velocity,
+            drone_orient=drone.orientation,
+            drone_health=drone.health,
+            enemies=enemies,
+            allies=allies,
+        )
+
+        return action, maneuver_name
 
     def _simple_ai_action(self, drone: CombatDrone) -> np.ndarray:
-        """Simple AI for opponents when no policy is provided."""
+        """Dynamic AI for opponents - creates varied dogfighting behavior."""
         # Find nearest enemy
         enemies = [d for d in self.drones.values() if d.team != drone.team and d.is_alive]
         if not enemies:
-            return np.array([0, 0, 0.5, 0, 0, 0])
+            # No enemies - do a patrol pattern
+            t = self.match_time + drone.drone_id * 10  # Offset per drone
+            roll_cmd = 0.3 * np.sin(t * 0.5)
+            pitch_cmd = 0.2 * np.sin(t * 0.3)
+            return np.array([roll_cmd, pitch_cmd, 0.6, 0, 0, 0])
 
         nearest = min(enemies, key=lambda e: np.linalg.norm(e.position - drone.position))
 
@@ -499,31 +549,74 @@ class DogfightEnv(gym.Env):
         distance = np.linalg.norm(to_enemy)
         to_enemy_normalized = to_enemy / (distance + 1e-6)
 
-        # Get current heading
+        # Get current heading and speed
         yaw = drone.orientation[2]
-        heading = np.array([np.cos(yaw), np.sin(yaw), 0])
-
-        # Calculate required turn
-        cross = np.cross(heading, to_enemy_normalized)
-        roll_cmd = np.clip(cross[2] * 2, -1, 1)
-
-        # Pitch to match altitude
-        alt_diff = nearest.position[2] - drone.position[2]
-        pitch_cmd = np.clip(alt_diff / 100, -1, 1)
-
-        # Throttle based on speed
+        pitch = drone.orientation[1]
+        heading = np.array([np.cos(yaw) * np.cos(pitch), np.sin(yaw) * np.cos(pitch), np.sin(pitch)])
         speed = np.linalg.norm(drone.velocity)
-        throttle = 0.7 if speed < self.config.max_speed * 0.8 else 0.4
 
-        # Fire if in range and roughly aligned
-        fire = 0
-        if distance < 500 and np.dot(heading, to_enemy_normalized) > 0.9:
+        # Alignment with enemy
+        alignment = np.dot(heading, to_enemy_normalized)
+
+        # Add time-based variation for dynamic movement
+        t = self.match_time + drone.drone_id * 3.14159
+        variation = np.sin(t * 2) * 0.3
+
+        # Different behaviors based on situation
+        if distance < 200:
+            # Too close - break away with evasive maneuver
+            roll_cmd = 0.8 * np.sign(np.sin(t * 5)) + variation
+            pitch_cmd = 0.5 + 0.3 * np.sin(t * 3)
+            throttle = 1.0  # Full power to escape
+            fire = 1 if alignment > 0.8 else 0
+
+        elif distance < 500 and alignment > 0.7:
+            # In firing position - steady pursuit with slight adjustments
+            cross = np.cross(heading, to_enemy_normalized)
+            roll_cmd = np.clip(cross[2] * 1.5 + variation * 0.2, -1, 1)
+            alt_diff = nearest.position[2] - drone.position[2]
+            pitch_cmd = np.clip(alt_diff / 150 + variation * 0.1, -0.5, 0.5)
+            throttle = 0.7
             fire = 1
+
+        elif alignment < 0.3:
+            # Enemy behind or to side - perform defensive turn
+            # Determine turn direction based on enemy position
+            cross = np.cross(heading, to_enemy_normalized)
+            turn_dir = np.sign(cross[2]) if abs(cross[2]) > 0.1 else np.sign(np.sin(t))
+
+            roll_cmd = turn_dir * 0.9  # Hard turn
+            pitch_cmd = 0.3 + variation * 0.2  # Pull up while turning
+            throttle = 0.9
+            fire = 0
+
+        else:
+            # Medium range pursuit with maneuvering
+            cross = np.cross(heading, to_enemy_normalized)
+            roll_cmd = np.clip(cross[2] * 2 + variation * 0.3, -1, 1)
+
+            # Varied altitude changes
+            alt_diff = nearest.position[2] - drone.position[2]
+            pitch_cmd = np.clip(alt_diff / 100 + np.sin(t * 1.5) * 0.2, -0.6, 0.6)
+
+            throttle = 0.8 if speed < self.config.max_speed * 0.7 else 0.5
+            fire = 1 if distance < 400 and alignment > 0.85 else 0
+
+        # Altitude safety - avoid ground and ceiling
+        if drone.position[2] < self.config.arena_height_min + 150:
+            pitch_cmd = max(pitch_cmd, 0.5)  # Pull up
+        elif drone.position[2] > self.config.arena_height_max - 100:
+            pitch_cmd = min(pitch_cmd, -0.3)  # Push down
+
+        # Speed management
+        if speed < self.config.min_speed * 1.2:
+            pitch_cmd = min(pitch_cmd, 0)  # Nose down to gain speed
+            throttle = 1.0
 
         return np.array([roll_cmd, pitch_cmd, throttle, 0, fire, 0])
 
     def _update_physics(self, drone: CombatDrone):
-        """Update drone physics (simplified fixed-wing model)."""
+        """Update drone physics - simplified arcade-style for responsive combat."""
         # Get current state
         pos = drone.position
         vel = drone.velocity
@@ -532,53 +625,78 @@ class DogfightEnv(gym.Env):
         speed = np.linalg.norm(vel)
         throttle = getattr(drone, '_throttle', 0.5)
 
-        # Aerodynamic forces
-        mass = self.fw_config["mass"]
-        wing_area = self.fw_config["wing_area"]
-        rho = 1.225  # Air density
+        # === ORIENTATION UPDATE ===
+        # Apply angular velocity to change heading (yaw changes based on roll)
+        roll_rate = drone.angular_velocity[0]
+        pitch_rate = drone.angular_velocity[1]
 
-        # Dynamic pressure
-        q = 0.5 * rho * speed ** 2
+        # Bank-to-turn: roll creates yaw change (like a real aircraft)
+        yaw_rate = roll_rate * 0.8  # Roll induces turn
 
-        # Lift (simplified)
-        cl = self.fw_config["cl_alpha"] * orient[1]  # Pitch angle
-        lift = q * wing_area * cl
+        # G-force from turn rate
+        if speed > 10:
+            max_turn_rate = self.config.max_g_force * self.gravity / speed
+            if abs(yaw_rate) > max_turn_rate:
+                yaw_rate = np.sign(yaw_rate) * max_turn_rate
 
-        # Drag
-        cd = self.fw_config["cd0"] + cl ** 2 / (np.pi * self.fw_config["aspect_ratio"] * self.fw_config["oswald"])
-        drag = q * wing_area * cd
+        drone._actual_g_force = 1.0 + abs(speed * yaw_rate / self.gravity)
+        drone._actual_g_force = min(drone._actual_g_force, self.config.max_g_force + 1.0)
 
-        # Thrust
-        thrust = throttle * self.fw_config["thrust_max"]
+        # Update orientation
+        drone.orientation[0] += roll_rate * self.dt  # Roll
+        drone.orientation[1] += pitch_rate * self.dt  # Pitch
+        drone.orientation[2] += yaw_rate * self.dt    # Yaw (from banking)
 
-        # Direction vectors
-        yaw = orient[2]
-        heading = np.array([np.cos(yaw), np.sin(yaw), 0])
-        up = np.array([0, 0, 1])
+        # Clamp orientation
+        drone.orientation[0] = np.clip(drone.orientation[0], -np.pi/2, np.pi/2)
+        drone.orientation[1] = np.clip(drone.orientation[1], -np.pi/3, np.pi/3)
 
-        # Apply forces
-        thrust_force = heading * thrust
-        drag_force = -vel / (speed + 1e-6) * drag
-        lift_force = up * lift
-        gravity_force = np.array([0, 0, -mass * self.gravity])
+        # Roll returns to level naturally
+        drone.orientation[0] *= 0.95  # Damping
 
-        total_force = thrust_force + drag_force + lift_force + gravity_force
-        acceleration = total_force / mass
+        # === VELOCITY UPDATE ===
+        roll = drone.orientation[0]
+        pitch = drone.orientation[1]
+        yaw = drone.orientation[2]
 
-        # Update velocity and position
-        drone.velocity = vel + acceleration * self.dt
+        # Forward direction based on heading
+        heading = np.array([
+            np.cos(yaw) * np.cos(pitch),
+            np.sin(yaw) * np.cos(pitch),
+            np.sin(pitch)
+        ])
+
+        # Target speed based on throttle
+        target_speed = self.config.min_speed + throttle * (self.config.max_speed - self.config.min_speed)
+
+        # Smoothly adjust velocity to point in heading direction at target speed
+        target_vel = heading * target_speed
+        blend = 0.1  # How quickly velocity aligns with heading
+        drone.velocity = drone.velocity * (1 - blend) + target_vel * blend
+
+        # Apply gravity effect based on pitch
+        if pitch < 0:  # Nose down - gain speed
+            speed_gain = -pitch * 20
+            current_speed = np.linalg.norm(drone.velocity)
+            if current_speed < self.config.max_speed:
+                drone.velocity *= (1 + speed_gain * self.dt / current_speed)
+        elif pitch > 0.3:  # Nose up - lose speed
+            speed_loss = pitch * 15
+            current_speed = np.linalg.norm(drone.velocity)
+            if current_speed > self.config.min_speed:
+                drone.velocity *= (1 - speed_loss * self.dt / current_speed)
+
+        # Altitude changes from velocity
+        drone.velocity[2] -= self.gravity * 0.3 * self.dt  # Some gravity effect
+
+        # === POSITION UPDATE ===
         drone.position = pos + drone.velocity * self.dt
 
-        # Update orientation based on angular velocity
-        drone.orientation = orient + drone.angular_velocity * self.dt
-        drone.orientation[0] = np.clip(drone.orientation[0], -np.pi/2, np.pi/2)  # Roll limit
-        drone.orientation[1] = np.clip(drone.orientation[1], -np.pi/4, np.pi/4)  # Pitch limit
-
-        # Speed limits
+        # === SPEED LIMITS ===
         speed = np.linalg.norm(drone.velocity)
         if speed < self.config.min_speed:
-            # Stall - lose altitude
-            drone.velocity[2] -= self.gravity * self.dt
+            drone.velocity = drone.velocity / (speed + 1e-6) * self.config.min_speed
+            drone.velocity[2] -= 5  # Stall effect
         elif speed > self.config.max_speed:
             drone.velocity = drone.velocity / speed * self.config.max_speed
 
@@ -640,17 +758,26 @@ class DogfightEnv(gym.Env):
             if weapon.fire():
                 # Calculate hit probability based on distance and alignment
                 to_target = target.position - drone.position
-                heading = np.array([np.cos(drone.orientation[2]), np.sin(drone.orientation[2]), 0])
+                yaw = drone.orientation[2]
+                pitch = drone.orientation[1]
+                # Full 3D heading vector
+                heading = np.array([
+                    np.cos(yaw) * np.cos(pitch),
+                    np.sin(yaw) * np.cos(pitch),
+                    np.sin(pitch)
+                ])
                 alignment = np.dot(heading, to_target / (distance + 1e-6))
 
-                hit_prob = alignment * (1 - distance / weapon.range) * 0.8
+                # More generous hit calculation for exciting combat
+                range_factor = 1 - (distance / weapon.range) * 0.5  # Less penalty for range
+                hit_prob = max(0.1, alignment) * range_factor
 
                 if weapon.weapon_type == WeaponType.MISSILE_IR:
-                    hit_prob *= 0.9  # High hit rate for missiles
+                    hit_prob *= 0.95  # Very high hit rate for missiles
                 elif weapon.weapon_type == WeaponType.MISSILE_RADAR:
-                    hit_prob *= 0.85
+                    hit_prob *= 0.90
                 elif weapon.weapon_type == WeaponType.GUN:
-                    hit_prob *= 0.3  # Lower for guns
+                    hit_prob *= 0.6  # Better gun accuracy for more action
 
                 hit = np.random.random() < hit_prob
 
@@ -702,21 +829,38 @@ class DogfightEnv(gym.Env):
         return events
 
     def _check_boundaries(self, drone: CombatDrone):
-        """Check if drone is out of bounds."""
+        """Check if drone is out of bounds and enforce hard limits."""
         pos = drone.position
         half_size = self.config.arena_size / 2
+        warning_zone = half_size * 0.9  # 90% of boundary
 
-        if abs(pos[0]) > half_size or abs(pos[1]) > half_size:
-            # Push back and damage
-            drone.take_damage(10)
+        # Soft boundary - warn and turn back
+        if abs(pos[0]) > warning_zone or abs(pos[1]) > warning_zone:
+            # Apply force pushing back toward center
+            center_dir = -pos[:2] / (np.linalg.norm(pos[:2]) + 1e-6)
+            drone.velocity[:2] += center_dir * 10  # Push toward center
 
-            # Reflect velocity
-            if abs(pos[0]) > half_size:
-                drone.velocity[0] *= -0.5
-                drone.position[0] = np.sign(pos[0]) * (half_size - 10)
-            if abs(pos[1]) > half_size:
-                drone.velocity[1] *= -0.5
-                drone.position[1] = np.sign(pos[1]) * (half_size - 10)
+        # Hard boundary - enforce strict limits
+        if abs(pos[0]) > half_size:
+            drone.take_damage(5)
+            drone.velocity[0] *= -0.8
+            drone.position[0] = np.sign(pos[0]) * (half_size - 50)
+            # Force turn toward center
+            drone.orientation[2] = np.arctan2(-pos[1], -pos[0])
+
+        if abs(pos[1]) > half_size:
+            drone.take_damage(5)
+            drone.velocity[1] *= -0.8
+            drone.position[1] = np.sign(pos[1]) * (half_size - 50)
+            # Force turn toward center
+            drone.orientation[2] = np.arctan2(-pos[1], -pos[0])
+
+        # Absolute hard limit - teleport back if somehow escaped
+        max_distance = half_size * 1.2
+        if abs(pos[0]) > max_distance or abs(pos[1]) > max_distance:
+            drone.position[0] = np.clip(drone.position[0], -half_size + 100, half_size - 100)
+            drone.position[1] = np.clip(drone.position[1], -half_size + 100, half_size - 100)
+            drone.velocity[:2] = drone.velocity[:2] * 0.5  # Slow down
 
     def _check_altitude(self, drone: CombatDrone):
         """Check altitude limits."""
@@ -847,11 +991,9 @@ class DogfightEnv(gym.Env):
         obs.append(1.0 - min(abs(drone.position[0]), abs(drone.position[1])) /
                    (self.config.arena_size / 2))
 
-        # G-force estimate
-        speed = np.linalg.norm(drone.velocity)
-        turn_rate = np.linalg.norm(drone.angular_velocity)
-        g_force = speed * turn_rate / self.gravity
-        obs.append(min(g_force / self.config.max_g_force, 1.0))
+        # G-force (use actual computed value from physics, capped realistically)
+        actual_g = getattr(drone, '_actual_g_force', 1.0)
+        obs.append(min(actual_g / self.config.max_g_force, 1.0))
 
         return np.array(obs, dtype=np.float32)
 

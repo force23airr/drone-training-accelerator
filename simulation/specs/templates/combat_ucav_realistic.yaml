@@ -1,0 +1,180 @@
+# ==============================================================================
+# REALISTIC COMBAT UCAV SPECIFICATION
+# ==============================================================================
+#
+# Based on real-world combat UAV designs like:
+# - XQ-58 Valkyrie (Kratos)
+# - X-47B (Northrop Grumman)
+# - nEUROn (Dassault)
+#
+# This is a medium-sized stealthy UCAV optimized for air combat.
+#
+# ==============================================================================
+
+identity:
+  name: "Shadow Strike MK-II"
+  manufacturer: "Tactical Aerospace Systems"
+  version: "2.1.0"
+  category: "fixed_wing"
+
+# ------------------------------------------------------------------------------
+# PHYSICAL DIMENSIONS
+# Based on XQ-58 Valkyrie class (~2,700 kg, 8.8m wingspan)
+# ------------------------------------------------------------------------------
+physical:
+  mass_kg: 2700.0                    # Realistic UCAV mass
+  wingspan_m: 8.8                    # Similar to XQ-58
+  length_m: 9.1                      # Realistic fuselage length
+  wing_area_m2: 18.5                 # Gives reasonable wing loading
+
+  height_m: 1.8
+  fuselage_diameter_m: 1.1
+
+# ------------------------------------------------------------------------------
+# PERFORMANCE ENVELOPE
+# Realistic subsonic combat performance
+# ------------------------------------------------------------------------------
+performance:
+  max_speed_ms: 180.0                # Reduced for arena dynamics (~650 km/h)
+  cruise_speed_ms: 120.0             # Efficient cruise ~430 km/h
+  stall_speed_ms: 35.0               # Lower stall for better maneuvering margin
+  max_g_force: 9.0                   # Fighter-like g capability
+  max_altitude_m: 13700.0            # ~45,000 ft service ceiling
+
+  min_g_force: -3.0
+  max_climb_rate_ms: 75.0            # Good climb rate
+  max_roll_rate_degs: 200.0
+  max_pitch_rate_degs: 80.0
+  max_yaw_rate_degs: 45.0
+  max_bank_angle_deg: 85.0
+
+# ------------------------------------------------------------------------------
+# PROPULSION
+# Single turbofan, realistic T/W for combat maneuvering
+# ------------------------------------------------------------------------------
+propulsion:
+  type: "turbofan"
+  max_thrust_n: 18900.0              # ~4,250 lbf - similar to Williams FJ44
+  fuel_capacity_kg: 680.0            # Internal fuel
+
+  num_engines: 1
+  idle_thrust_fraction: 0.08
+  sfc: 0.000065                      # Typical turbofan SFC
+  thrust_vectoring: false
+  afterburner: false
+
+# ------------------------------------------------------------------------------
+# CONTROL SURFACES
+# Flying wing / blended body with elevons
+# ------------------------------------------------------------------------------
+control:
+  surface_type: "elevon"             # Stealthy flying wing config
+
+  aileron_max_deg: 30.0
+  elevator_max_deg: 30.0
+  rudder_max_deg: 25.0               # Split drag rudders
+  has_speedbrake: true
+  has_slats: false
+
+# ------------------------------------------------------------------------------
+# INERTIA
+# Realistic for this size aircraft
+# ------------------------------------------------------------------------------
+inertia:
+  Ixx: 3200.0                        # kg*m²
+  Iyy: 8500.0
+  Izz: 11000.0
+
+# ------------------------------------------------------------------------------
+# AERODYNAMICS
+# Realistic coefficients for stealthy UCAV
+# ------------------------------------------------------------------------------
+aerodynamics:
+  CL_0: 0.12                         # Slight positive lift at zero alpha
+  CL_alpha: 4.8                      # Moderate lift curve slope
+  CL_max: 1.35                       # Clean config max lift
+  CD_0: 0.022                        # Low drag, stealthy shaping
+  oswald_efficiency: 0.72            # Reduced efficiency due to stealth
+  Cm_alpha: -0.45                    # Slightly relaxed stability
+  Cn_beta: 0.08                      # Reduced directional stability (stealth)
+  Cl_beta: -0.04                     # Moderate dihedral effect
+
+# ------------------------------------------------------------------------------
+# PAYLOAD & WEAPONS
+# Internal weapons bay for stealth
+# ------------------------------------------------------------------------------
+payload:
+  capacity_kg: 550.0                 # Internal payload
+  hardpoints: 2                      # Internal bays
+  internal_bay: true
+
+  weapons:
+    - type: "gun"
+      quantity: 1
+      ammo: 400
+      range_m: 350
+      damage: 25
+      cooldown_s: 0.08
+      mass_kg: 85
+
+    - type: "missile_ir"
+      quantity: 4
+      ammo: 4
+      range_m: 2500
+      damage: 120
+      cooldown_s: 1.5
+      mass_kg: 40
+
+    - type: "missile_radar"
+      quantity: 2
+      ammo: 2
+      range_m: 5000
+      damage: 150
+      cooldown_s: 2.0
+      mass_kg: 75
+
+# ------------------------------------------------------------------------------
+# SENSORS
+# Modern sensor suite
+# ------------------------------------------------------------------------------
+sensors:
+  radar_range_km: 80.0               # AESA radar
+  irst: true                         # Infrared Search & Track
+  rwr: true                          # Radar Warning Receiver
+  datalink_range_km: 350.0           # Beyond line of sight
+
+# ------------------------------------------------------------------------------
+# CAPABILITIES
+# ------------------------------------------------------------------------------
+capabilities:
+  carrier_capable: false
+  catapult_launch: true              # Can be rail launched
+  arrested_landing: false
+  autonomous: true
+  swarm: true                        # Loyal wingman capable
+  stealth: true                      # Low observable
+  all_weather: true
+
+notes: |
+  Realistic medium-sized combat UCAV based on XQ-58 Valkyrie class.
+
+  Key characteristics:
+  - Wing loading: 146 kg/m² (typical for combat aircraft)
+  - Thrust/weight: 0.71 (good for combat maneuvering)
+  - Max 9g capability for fighter-like agility
+  - Stealthy flying wing configuration
+  - Internal weapons bay
+
+  Designed for:
+  - Air-to-air combat (loyal wingman role)
+  - SEAD/DEAD missions
+  - Deep strike
+
+  Performance validated against real-world UCAV specifications.
+
+tags:
+  - combat
+  - ucav
+  - stealth
+  - realistic
+  - valkyrie-class

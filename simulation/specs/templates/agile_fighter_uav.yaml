@@ -1,0 +1,133 @@
+# ==============================================================================
+# AGILE FIGHTER UAV - Optimized for Simulator Combat
+# ==============================================================================
+#
+# A lightweight, highly maneuverable combat UAV optimized for
+# dogfight simulation. Based on smaller tactical UAV designs.
+#
+# ==============================================================================
+
+identity:
+  name: "Viper-X Fighter UAV"
+  manufacturer: "Advanced Combat Systems"
+  version: "1.0.0"
+  category: "fixed_wing"
+
+# ------------------------------------------------------------------------------
+# PHYSICAL DIMENSIONS
+# Compact fighter design - similar to target drones
+# ------------------------------------------------------------------------------
+physical:
+  mass_kg: 450.0                     # Light for agility
+  wingspan_m: 5.5
+  length_m: 4.8
+  wing_area_m2: 8.0                  # Wing loading ~56 kg/m²
+
+  height_m: 1.2
+  fuselage_diameter_m: 0.6
+
+# ------------------------------------------------------------------------------
+# PERFORMANCE ENVELOPE
+# Optimized for arena combat
+# ------------------------------------------------------------------------------
+performance:
+  max_speed_ms: 150.0                # ~540 km/h
+  cruise_speed_ms: 100.0             # ~360 km/h
+  stall_speed_ms: 28.0               # Low stall for tight turns
+  max_g_force: 12.0                  # Very high g for aggressive maneuvers
+  max_altitude_m: 8000.0
+
+  min_g_force: -5.0
+  max_climb_rate_ms: 60.0
+  max_roll_rate_degs: 300.0          # Fast roll
+  max_pitch_rate_degs: 120.0
+  max_yaw_rate_degs: 80.0
+  max_bank_angle_deg: 90.0
+
+# ------------------------------------------------------------------------------
+# PROPULSION
+# High T/W for combat
+# ------------------------------------------------------------------------------
+propulsion:
+  type: "jet"
+  max_thrust_n: 5500.0               # T/W ~1.25
+  fuel_capacity_kg: 120.0
+
+  num_engines: 1
+  idle_thrust_fraction: 0.10
+  thrust_vectoring: false
+  afterburner: false
+
+# ------------------------------------------------------------------------------
+# CONTROL SURFACES
+# ------------------------------------------------------------------------------
+control:
+  surface_type: "conventional"
+
+  aileron_max_deg: 30.0
+  elevator_max_deg: 35.0
+  rudder_max_deg: 30.0
+  has_speedbrake: true
+  has_slats: true
+
+# ------------------------------------------------------------------------------
+# PAYLOAD & WEAPONS
+# Combat loadout
+# ------------------------------------------------------------------------------
+payload:
+  capacity_kg: 150.0
+  hardpoints: 4
+  internal_bay: false
+
+  weapons:
+    - type: "gun"
+      quantity: 1
+      ammo: 600
+      range_m: 400
+      damage: 35                     # High damage gun
+      cooldown_s: 0.06               # Fast fire rate
+      mass_kg: 40
+
+    - type: "missile_ir"
+      quantity: 4
+      ammo: 4
+      range_m: 1500
+      damage: 100
+      cooldown_s: 1.0
+      mass_kg: 25
+
+# ------------------------------------------------------------------------------
+# SENSORS
+# ------------------------------------------------------------------------------
+sensors:
+  radar_range_km: 40.0
+  irst: true
+  rwr: true
+  datalink_range_km: 100.0
+
+# ------------------------------------------------------------------------------
+# CAPABILITIES
+# ------------------------------------------------------------------------------
+capabilities:
+  carrier_capable: false
+  catapult_launch: true
+  arrested_landing: false
+  autonomous: true
+  swarm: true
+  stealth: false
+  all_weather: true
+
+notes: |
+  Lightweight agile fighter UAV optimized for close combat.
+
+  Key stats:
+  - Wing loading: 56 kg/m² (very agile)
+  - Thrust/weight: 1.25 (excellent acceleration)
+  - Max G: 12g (extreme maneuverability)
+  - Fast roll rate for BFM
+
+tags:
+  - fighter
+  - agile
+  - combat
+  - lightweight

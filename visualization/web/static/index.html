@@ -1,0 +1,618 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Dogfight Combat Viewer</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        body {
+            overflow: hidden;
+            background: #1a1a2e;
+            font-family: 'Segoe UI', sans-serif;
+        }
+        #canvas-container {
+            width: 100vw;
+            height: 100vh;
+        }
+        #hud {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            pointer-events: none;
+            color: white;
+        }
+        .hud-score {
+            position: absolute;
+            top: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            font-size: 24px;
+            font-weight: bold;
+            text-shadow: 2px 2px 4px rgba(0,0,0,0.8);
+        }
+        .score-red { color: #ff6b6b; }
+        .score-blue { color: #6b9dff; }
+        .hud-time {
+            position: absolute;
+            top: 55px;
+            left: 50%;
+            transform: translateX(-50%);
+            font-size: 16px;
+            color: #aaa;
+        }
+        .hud-camera {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            font-size: 14px;
+            color: #ffcc00;
+        }
+        .hud-selected {
+            position: absolute;
+            top: 50px;
+            left: 20px;
+            font-size: 13px;
+            line-height: 1.6;
+            background: rgba(0,0,0,0.5);
+            padding: 10px;
+            border-radius: 5px;
+        }
+        .hud-killfeed {
+            position: absolute;
+            top: 20px;
+            right: 20px;
+            font-size: 13px;
+            text-align: right;
+            line-height: 1.8;
+        }
+        .hud-controls {
+            position: absolute;
+            bottom: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            font-size: 12px;
+            color: #666;
+        }
+        .hud-status {
+            position: absolute;
+            bottom: 20px;
+            right: 20px;
+            font-size: 12px;
+        }
+        .status-connected { color: #4ecdc4; }
+        .status-disconnected { color: #ff6b6b; }
+        .minimap {
+            position: absolute;
+            bottom: 20px;
+            left: 20px;
+            width: 150px;
+            height: 150px;
+            background: rgba(0,0,0,0.7);
+            border: 1px solid #444;
+            border-radius: 5px;
+        }
+        .minimap-canvas {
+            width: 100%;
+            height: 100%;
+        }
+    </style>
+</head>
+<body>
+    <div id="canvas-container"></div>
+
+    <div id="hud">
+        <div class="hud-score">
+            <span class="score-red">RED 0</span>
+            <span> - </span>
+            <span class="score-blue">0 BLUE</span>
+        </div>
+        <div class="hud-time">Time: 0:00</div>
+        <div class="hud-camera">Camera: Chase</div>
+        <div class="hud-selected"></div>
+        <div class="hud-killfeed"></div>
+        <div class="hud-controls">1-4: Camera | Tab: Target | Click: Select | Scroll: Zoom</div>
+        <div class="hud-status status-disconnected">Disconnected</div>
+        <div class="minimap">
+            <canvas class="minimap-canvas" width="150" height="150"></canvas>
+        </div>
+    </div>
+
+    <script type="importmap">
+    {
+        "imports": {
+            "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+            "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+        }
+    }
+    </script>
+
+    <script type="module">
+        import * as THREE from 'three';
+        import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+        // ============================================================
+        // Configuration
+        // ============================================================
+        const WS_PORT = parseInt(window.location.port || '8080') + 1;
+        const WS_URL = `ws://${window.location.hostname}:${WS_PORT}`;
+        let arenaSize = 2000;
+
+        // ============================================================
+        // Scene Setup
+        // ============================================================
+        const container = document.getElementById('canvas-container');
+        const scene = new THREE.Scene();
+        scene.background = new THREE.Color(0x4a6fa5);
+        scene.fog = new THREE.Fog(0x4a6fa5, 500, 3000);
+
+        const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 1, 5000);
+        camera.position.set(0, 200, -300);
+
+        const renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.setPixelRatio(window.devicePixelRatio);
+        renderer.shadowMap.enabled = true;
+        container.appendChild(renderer.domElement);
+
+        // Controls
+        const controls = new OrbitControls(camera, renderer.domElement);
+        controls.enableDamping = true;
+        controls.dampingFactor = 0.05;
+        controls.maxDistance = 2000;
+
+        // ============================================================
+        // Lighting
+        // ============================================================
+        const ambientLight = new THREE.AmbientLight(0x6699cc, 0.5);
+        scene.add(ambientLight);
+
+        const sunLight = new THREE.DirectionalLight(0xffffff, 1);
+        sunLight.position.set(500, 1000, 500);
+        sunLight.castShadow = true;
+        scene.add(sunLight);
+
+        // ============================================================
+        // Arena
+        // ============================================================
+        let arenaGroup = new THREE.Group();
+        scene.add(arenaGroup);
+
+        function clearGroup(group) {
+            while (group.children.length > 0) {
+                const child = group.children[0];
+                group.remove(child);
+                if (child.geometry) child.geometry.dispose();
+                if (child.material) {
+                    if (Array.isArray(child.material)) {
+                        child.material.forEach(material => material.dispose());
+                    } else {
+                        child.material.dispose();
+                    }
+                }
+            }
+        }
+
+        function buildArena(size) {
+            clearGroup(arenaGroup);
+
+            // Ground
+            const groundGeometry = new THREE.PlaneGeometry(size, size, 20, 20);
+            const groundMaterial = new THREE.MeshStandardMaterial({
+                color: 0x3d5a3d,
+                roughness: 0.9,
+            });
+            const ground = new THREE.Mesh(groundGeometry, groundMaterial);
+            ground.rotation.x = -Math.PI / 2;
+            ground.receiveShadow = true;
+            arenaGroup.add(ground);
+
+            // Grid
+            const gridHelper = new THREE.GridHelper(size, 20, 0x555555, 0x444444);
+            gridHelper.position.y = 1;
+            arenaGroup.add(gridHelper);
+
+            // Altitude rings
+            [100, 500, 1000].forEach(alt => {
+                const ringGeometry = new THREE.RingGeometry(size / 2 - 10, size / 2, 64);
+                const ringMaterial = new THREE.MeshBasicMaterial({
+                    color: 0x888888,
+                    transparent: true,
+                    opacity: 0.2,
+                    side: THREE.DoubleSide,
+                });
+                const ring = new THREE.Mesh(ringGeometry, ringMaterial);
+                ring.rotation.x = -Math.PI / 2;
+                ring.position.y = alt;
+                arenaGroup.add(ring);
+            });
+
+            controls.maxDistance = size;
+        }
+
+        buildArena(arenaSize);
+
+        // ============================================================
+        // UAV Models
+        // ============================================================
+        const uavModels = new Map();
+        const trails = new Map();
+
+        function createUAVModel(id, team) {
+            const group = new THREE.Group();
+
+            // Team color
+            const color = team === 0 ? 0xff4444 : 0x4488ff;
+            const material = new THREE.MeshStandardMaterial({ color, metalness: 0.5, roughness: 0.5 });
+
+            // Fuselage
+            const fuselageGeometry = new THREE.ConeGeometry(4, 16, 8);
+            fuselageGeometry.rotateX(Math.PI / 2);
+            const fuselage = new THREE.Mesh(fuselageGeometry, material);
+            group.add(fuselage);
+
+            // Wings
+            const wingGeometry = new THREE.BoxGeometry(24, 0.5, 6);
+            const wing = new THREE.Mesh(wingGeometry, material);
+            wing.position.z = 2;
+            group.add(wing);
+
+            // Tail
+            const tailGeometry = new THREE.BoxGeometry(8, 0.3, 4);
+            const tail = new THREE.Mesh(tailGeometry, material);
+            tail.position.z = 7;
+            group.add(tail);
+
+            // Vertical stabilizer
+            const vstabGeometry = new THREE.BoxGeometry(0.5, 6, 4);
+            const vstab = new THREE.Mesh(vstabGeometry, material);
+            vstab.position.set(0, 3, 7);
+            group.add(vstab);
+
+            // Engine glow
+            const glowGeometry = new THREE.SphereGeometry(2);
+            const glowMaterial = new THREE.MeshBasicMaterial({ color: 0xffaa33 });
+            const glow = new THREE.Mesh(glowGeometry, glowMaterial);
+            glow.position.z = 8;
+            group.add(glow);
+
+            group.scale.set(2, 2, 2);
+            group.userData = { id, team, glow };
+
+            return group;
+        }
+
+        function createTrail(team) {
+            const trailColor = team === 0 ? 0xff6666 : 0x6699ff;
+            const geometry = new THREE.BufferGeometry();
+            const material = new THREE.LineBasicMaterial({
+                color: trailColor,
+                transparent: true,
+                opacity: 0.5,
+            });
+            const trail = new THREE.Line(geometry, material);
+            trail.userData.points = [];
+            return trail;
+        }
+
+        function updateTrail(trail, position) {
+            const points = trail.userData.points;
+            points.push(position.clone());
+
+            // Keep last 120 points
+            while (points.length > 120) points.shift();
+
+            if (points.length > 1) {
+                const geometry = new THREE.BufferGeometry().setFromPoints(points);
+                trail.geometry.dispose();
+                trail.geometry = geometry;
+            }
+        }
+
+        // ============================================================
+        // State Management
+        // ============================================================
+        let latestFrame = null;
+        let selectedUAVId = null;
+        let cameraMode = 'chase';
+        const killFeed = [];
+
+        function updateFromFrame(frame) {
+            latestFrame = frame;
+
+            if (frame.arena_size && frame.arena_size !== arenaSize) {
+                arenaSize = frame.arena_size;
+                buildArena(arenaSize);
+            }
+
+            // Update/create UAVs
+            const seenIds = new Set();
+
+            for (const uav of frame.uavs) {
+                seenIds.add(uav.id);
+
+                if (!uavModels.has(uav.id)) {
+                    const model = createUAVModel(uav.id, uav.team);
+                    scene.add(model);
+                    uavModels.set(uav.id, model);
+
+                    const trail = createTrail(uav.team);
+                    scene.add(trail);
+                    trails.set(uav.id, trail);
+                }
+
+                const model = uavModels.get(uav.id);
+
+                if (uav.alive) {
+                    model.visible = true;
+                    model.position.set(uav.position[0], uav.position[2], uav.position[1]);
+                    model.rotation.set(uav.orientation[1], -uav.orientation[2], uav.orientation[0]);
+
+                    // Update trail
+                    const trail = trails.get(uav.id);
+                    if (trail) {
+                        updateTrail(trail, model.position);
+                    }
+
+                    // Engine glow based on speed
+                    const glow = model.userData.glow;
+                    if (glow) {
+                        const intensity = Math.min(1, uav.speed / 300);
+                        glow.scale.setScalar(0.5 + intensity);
+                    }
+                } else {
+                    model.visible = false;
+                }
+            }
+
+            // Remove old models
+            for (const [id, model] of uavModels) {
+                if (!seenIds.has(id)) {
+                    scene.remove(model);
+                    uavModels.delete(id);
+
+                    const trail = trails.get(id);
+                    if (trail) {
+                        scene.remove(trail);
+                        trails.delete(id);
+                    }
+                }
+            }
+
+            // Set default selection
+            if (selectedUAVId === null && uavModels.size > 0) {
+                selectedUAVId = uavModels.keys().next().value;
+            }
+
+            // Process events
+            for (const event of frame.events) {
+                if (event.event_type === 2) { // KILL
+                    killFeed.unshift({
+                        time: frame.match_time,
+                        attacker: event.attacker_id,
+                        target: event.target_id,
+                    });
+                    if (killFeed.length > 5) killFeed.pop();
+                }
+            }
+
+            updateHUD(frame);
+        }
+
+        // ============================================================
+        // Camera
+        // ============================================================
+        function updateCamera() {
+            if (cameraMode === 'chase' && selectedUAVId !== null) {
+                const model = uavModels.get(selectedUAVId);
+                if (model && model.visible) {
+                    const offset = new THREE.Vector3(0, 30, -80);
+                    offset.applyQuaternion(model.quaternion);
+
+                    const targetPos = model.position.clone().add(offset);
+                    camera.position.lerp(targetPos, 0.1);
+
+                    const lookAt = model.position.clone().add(new THREE.Vector3(0, 5, 0));
+                    controls.target.lerp(lookAt, 0.1);
+                }
+            } else if (cameraMode === 'tactical') {
+                camera.position.lerp(new THREE.Vector3(0, 1500, 0), 0.05);
+                controls.target.lerp(new THREE.Vector3(0, 0, 0), 0.05);
+            }
+        }
+
+        // ============================================================
+        // HUD
+        // ============================================================
+        function updateHUD(frame) {
+            // Score
+            document.querySelector('.score-red').textContent = `RED ${frame.red_score}`;
+            document.querySelector('.score-blue').textContent = `${frame.blue_score} BLUE`;
+
+            // Time
+            const mins = Math.floor(frame.match_time / 60);
+            const secs = Math.floor(frame.match_time % 60);
+            document.querySelector('.hud-time').textContent = `Time: ${mins}:${secs.toString().padStart(2, '0')}`;
+
+            // Camera mode
+            document.querySelector('.hud-camera').textContent = `Camera: ${cameraMode.charAt(0).toUpperCase() + cameraMode.slice(1)}`;
+
+            // Selected UAV
+            if (selectedUAVId !== null) {
+                const uav = frame.uavs.find(u => u.id === selectedUAVId);
+                if (uav) {
+                    const team = uav.team === 0 ? 'RED' : 'BLUE';
+                    const status = uav.alive ? 'ALIVE' : 'DEAD';
+                    const maneuver = uav.current_maneuver || 'LEVEL';
+                    document.querySelector('.hud-selected').innerHTML = `
+                        <strong>${team}-${uav.id}</strong><br>
+                        Speed: ${uav.speed.toFixed(0)} m/s<br>
+                        Alt: ${uav.altitude.toFixed(0)} m<br>
+                        HP: ${uav.health.toFixed(0)}%<br>
+                        K/D: ${uav.kills}/${uav.deaths}<br>
+                        G: ${uav.g_force.toFixed(1)}<br>
+                        ${maneuver}
+                    `;
+                }
+            }
+
+            // Kill feed
+            const feedHtml = killFeed.map(k =>
+                `[${k.time.toFixed(0)}s] ${k.attacker} → ${k.target}`
+            ).join('<br>');
+            document.querySelector('.hud-killfeed').innerHTML = feedHtml;
+
+            // Minimap
+            updateMinimap(frame);
+        }
+
+        function updateMinimap(frame) {
+            const canvas = document.querySelector('.minimap-canvas');
+            const ctx = canvas.getContext('2d');
+
+            ctx.fillStyle = 'rgba(0,0,0,0.7)';
+            ctx.fillRect(0, 0, 150, 150);
+
+            // Grid
+            ctx.strokeStyle = '#333';
+            ctx.beginPath();
+            for (let i = 0; i <= 4; i++) {
+                ctx.moveTo(i * 37.5, 0);
+                ctx.lineTo(i * 37.5, 150);
+                ctx.moveTo(0, i * 37.5);
+                ctx.lineTo(150, i * 37.5);
+            }
+            ctx.stroke();
+
+            // UAVs
+            for (const uav of frame.uavs) {
+                if (!uav.alive) continue;
+
+                const x = (uav.position[0] / arenaSize + 0.5) * 150;
+                const y = (uav.position[1] / arenaSize + 0.5) * 150;
+
+                ctx.fillStyle = uav.team === 0 ? '#ff4444' : '#4488ff';
+                ctx.beginPath();
+                ctx.arc(x, y, 4, 0, Math.PI * 2);
+                ctx.fill();
+
+                // Highlight selected
+                if (uav.id === selectedUAVId) {
+                    ctx.strokeStyle = '#ffff00';
+                    ctx.lineWidth = 2;
+                    ctx.stroke();
+                }
+            }
+        }
+
+        // ============================================================
+        // WebSocket
+        // ============================================================
+        let ws = null;
+        let reconnectTimer = null;
+
+        function connect() {
+            ws = new WebSocket(WS_URL);
+
+            ws.onopen = () => {
+                document.querySelector('.hud-status').textContent = 'Connected';
+                document.querySelector('.hud-status').className = 'hud-status status-connected';
+                clearTimeout(reconnectTimer);
+            };
+
+            ws.onmessage = (event) => {
+                try {
+                    const data = JSON.parse(event.data);
+                    if (data.type === 'frame') {
+                        updateFromFrame(data);
+                    }
+                } catch (e) {
+                    console.error('Parse error:', e);
+                }
+            };
+
+            ws.onclose = () => {
+                document.querySelector('.hud-status').textContent = 'Disconnected';
+                document.querySelector('.hud-status').className = 'hud-status status-disconnected';
+                reconnectTimer = setTimeout(connect, 2000);
+            };
+
+            ws.onerror = (error) => {
+                console.error('WebSocket error:', error);
+            };
+        }
+
+        // ============================================================
+        // Controls
+        // ============================================================
+        document.addEventListener('keydown', (e) => {
+            switch (e.key) {
+                case '1': cameraMode = 'chase'; break;
+                case '2': cameraMode = 'spectator'; break;
+                case '3': cameraMode = 'tactical'; break;
+                case '4': cameraMode = 'auto'; break;
+                case 'Tab':
+                    e.preventDefault();
+                    const ids = Array.from(uavModels.keys());
+                    if (ids.length > 0) {
+                        const idx = ids.indexOf(selectedUAVId);
+                        selectedUAVId = ids[(idx + 1) % ids.length];
+                    }
+                    break;
+            }
+        });
+
+        // Click to select UAV
+        renderer.domElement.addEventListener('click', (event) => {
+            const mouse = new THREE.Vector2(
+                (event.clientX / window.innerWidth) * 2 - 1,
+                -(event.clientY / window.innerHeight) * 2 + 1
+            );
+
+            const raycaster = new THREE.Raycaster();
+            raycaster.setFromCamera(mouse, camera);
+
+            const uavArray = Array.from(uavModels.values());
+            const intersects = raycaster.intersectObjects(uavArray, true);
+
+            if (intersects.length > 0) {
+                let obj = intersects[0].object;
+                while (obj.parent && !obj.userData.id) {
+                    obj = obj.parent;
+                }
+                if (obj.userData.id !== undefined) {
+                    selectedUAVId = obj.userData.id;
+                }
+            }
+        });
+
+        // Resize
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+
+        // ============================================================
+        // Animation Loop
+        // ============================================================
+        function animate() {
+            requestAnimationFrame(animate);
+
+            updateCamera();
+            controls.update();
+            renderer.render(scene, camera);
+        }
+
+        // Start
+        connect();
+        animate();
+    </script>
+</body>
+</html>

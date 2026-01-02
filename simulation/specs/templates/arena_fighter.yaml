@@ -1,0 +1,101 @@
+# ==============================================================================
+# ARENA FIGHTER - Optimized for Dogfight Simulation
+# ==============================================================================
+#
+# Configuration matched to the dogfight simulator's physics model.
+# Designed for close-quarters arena combat.
+#
+# ==============================================================================
+
+identity:
+  name: "Arena Hawk F-1"
+  manufacturer: "Combat Dynamics Inc"
+  version: "1.0.0"
+  category: "fixed_wing"
+
+# ------------------------------------------------------------------------------
+# PHYSICAL DIMENSIONS
+# Matched to simulator default drone model
+# ------------------------------------------------------------------------------
+physical:
+  mass_kg: 500.0
+  wingspan_m: 6.0
+  length_m: 5.5
+  wing_area_m2: 15.0                 # Wing loading 33 kg/m²
+
+  height_m: 1.5
+  fuselage_diameter_m: 0.8
+
+# ------------------------------------------------------------------------------
+# PERFORMANCE
+# Conservative speeds for arena maneuvering
+# ------------------------------------------------------------------------------
+performance:
+  max_speed_ms: 100.0                # ~360 km/h - good for 600m arena
+  cruise_speed_ms: 70.0              # ~250 km/h
+  stall_speed_ms: 25.0               # Low stall for tight turns
+  max_g_force: 9.0
+  max_altitude_m: 2000.0
+
+  min_g_force: -3.0
+  max_climb_rate_ms: 40.0
+  max_roll_rate_degs: 180.0
+  max_pitch_rate_degs: 90.0
+  max_bank_angle_deg: 80.0
+
+# ------------------------------------------------------------------------------
+# PROPULSION
+# ------------------------------------------------------------------------------
+propulsion:
+  type: "jet"
+  max_thrust_n: 50000.0              # High thrust for the mass
+  fuel_capacity_kg: 100.0
+
+  num_engines: 1
+
+# ------------------------------------------------------------------------------
+# CONTROL
+# ------------------------------------------------------------------------------
+control:
+  surface_type: "conventional"
+  aileron_max_deg: 25.0
+  elevator_max_deg: 25.0
+  rudder_max_deg: 30.0
+
+# ------------------------------------------------------------------------------
+# WEAPONS
+# High damage for quick kills
+# ------------------------------------------------------------------------------
+payload:
+  capacity_kg: 200.0
+  hardpoints: 2
+
+  weapons:
+    - type: "gun"
+      quantity: 1
+      ammo: 1000
+      range_m: 250
+      damage: 35
+      cooldown_s: 0.08
+      mass_kg: 50
+
+    - type: "missile_ir"
+      quantity: 4
+      ammo: 4
+      range_m: 500
+      damage: 100
+      cooldown_s: 1.5
+      mass_kg: 30
+
+capabilities:
+  autonomous: true
+  all_weather: true
+
+notes: |
+  Arena-optimized fighter matched to simulator physics.
+  Designed for close-quarters dogfighting.
+
+tags:
+  - arena
+  - fighter
+  - dogfight

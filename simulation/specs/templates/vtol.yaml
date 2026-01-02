@@ -1,0 +1,125 @@
+# ==============================================================================
+# DRONE SPECIFICATION TEMPLATE - VTOL (Vertical Takeoff and Landing)
+# ==============================================================================
+#
+# This template is for hybrid VTOL drones that can hover like a multirotor
+# and fly efficiently like a fixed-wing aircraft.
+#
+# Examples: Tiltrotor, tailsitter, lift+cruise configurations
+#
+# ==============================================================================
+
+identity:
+  name: "Your VTOL Drone Name"
+  manufacturer: "Your Company"
+  version: "1.0.0"
+  category: "vtol"
+
+# ------------------------------------------------------------------------------
+# PHYSICAL DIMENSIONS
+# ------------------------------------------------------------------------------
+physical:
+  mass_kg: 25.0                      # (REQUIRED) Total takeoff mass
+  wingspan_m: 3.0                    # (REQUIRED) Wing span
+  length_m: 2.0                      # (REQUIRED) Nose to tail
+  wing_area_m2: 1.0                  # (REQUIRED) Wing area
+
+  height_m: 0.8
+  fuselage_diameter_m: 0.4
+
+# ------------------------------------------------------------------------------
+# PERFORMANCE ENVELOPE
+# Note: VTOLs have different performance in hover vs. forward flight
+# These specs are for forward flight mode
+# ------------------------------------------------------------------------------
+performance:
+  max_speed_ms: 40.0                 # (REQUIRED) Max speed in forward flight
+  cruise_speed_ms: 25.0              # (REQUIRED) Efficient cruise
+  stall_speed_ms: 12.0               # (REQUIRED) Transition speed to wing-borne
+  max_g_force: 4.0                   # (REQUIRED) Structural limit
+  max_altitude_m: 4000.0
+
+  max_climb_rate_ms: 8.0             # In forward flight (hover is different)
+  max_roll_rate_degs: 90.0
+  max_pitch_rate_degs: 45.0
+  max_bank_angle_deg: 60.0
+
+# ------------------------------------------------------------------------------
+# PROPULSION
+# VTOLs often have multiple propulsion systems
+# Specify the forward flight system here
+# ------------------------------------------------------------------------------
+propulsion:
+  type: "electric"                   # (REQUIRED) Usually electric or hybrid
+  max_thrust_n: 400.0                # (REQUIRED) Forward flight thrust
+  fuel_capacity_kg: 5.0              # Battery capacity
+
+  num_engines: 5                     # e.g., 4 lift + 1 cruise
+  idle_thrust_fraction: 0.05
+
+# ------------------------------------------------------------------------------
+# CONTROL
+# ------------------------------------------------------------------------------
+control:
+  surface_type: "elevon"             # Many VTOLs use elevons
+
+  aileron_max_deg: 25.0
+  elevator_max_deg: 25.0
+  has_speedbrake: false
+  has_slats: false
+
+# ------------------------------------------------------------------------------
+# INERTIA
+# ------------------------------------------------------------------------------
+inertia:
+  Ixx: 2.0
+  Iyy: 3.0
+  Izz: 4.0
+
+# ------------------------------------------------------------------------------
+# PAYLOAD
+# ------------------------------------------------------------------------------
+payload:
+  capacity_kg: 5.0
+  hardpoints: 2
+  internal_bay: false
+
+  weapons:
+    - type: "gun"
+      quantity: 1
+      ammo: 200
+      range_m: 100
+      damage: 8
+      cooldown_s: 0.15
+      mass_kg: 2.0
+
+# ------------------------------------------------------------------------------
+# SENSORS
+# ------------------------------------------------------------------------------
+sensors:
+  radar_range_km: 0.0
+  irst: false
+  rwr: false
+  datalink_range_km: 50.0
+
+# ------------------------------------------------------------------------------
+# CAPABILITIES
+# ------------------------------------------------------------------------------
+capabilities:
+  carrier_capable: false
+  catapult_launch: false             # VTOLs don't need catapults
+  arrested_landing: false            # VTOLs don't need arrestor
+  autonomous: true
+  swarm: true
+  stealth: false
+  all_weather: false
+
+notes: |
+  Template for VTOL drones (tiltrotor, tailsitter, lift+cruise).
+  Performance specs are for forward flight mode.
+  Hover performance is determined by lift motor thrust.
+
+tags:
+  - vtol
+  - hybrid
+  - electric

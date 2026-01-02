@@ -1,0 +1,139 @@
+# ==============================================================================
+# DRONE SPECIFICATION TEMPLATE - Loitering Munition
+# ==============================================================================
+#
+# This template is for loitering munitions (kamikaze drones).
+# Examples: Switchblade, Harop, Lancet
+#
+# These are typically small, expendable, and optimized for single-use.
+#
+# ==============================================================================
+
+identity:
+  name: "Your Loitering Munition"
+  manufacturer: "Your Company"
+  version: "1.0.0"
+  category: "fixed_wing"
+
+# ------------------------------------------------------------------------------
+# PHYSICAL DIMENSIONS
+# Loitering munitions are typically small and lightweight
+# ------------------------------------------------------------------------------
+physical:
+  mass_kg: 15.0                      # (REQUIRED) Launch mass
+  wingspan_m: 1.5                    # (REQUIRED)
+  length_m: 1.2                      # (REQUIRED)
+  wing_area_m2: 0.3                  # (REQUIRED)
+
+  height_m: 0.2
+  fuselage_diameter_m: 0.15
+
+# ------------------------------------------------------------------------------
+# PERFORMANCE ENVELOPE
+# Optimized for loiter endurance and terminal attack
+# ------------------------------------------------------------------------------
+performance:
+  max_speed_ms: 80.0                 # (REQUIRED) Terminal dive speed
+  cruise_speed_ms: 40.0              # (REQUIRED) Loiter speed
+  stall_speed_ms: 20.0               # (REQUIRED)
+  max_g_force: 10.0                  # (REQUIRED) Can pull high g in terminal
+  max_altitude_m: 3000.0             # Typical operating altitude
+
+  max_climb_rate_ms: 15.0
+  max_roll_rate_degs: 360.0
+  max_pitch_rate_degs: 180.0
+  max_bank_angle_deg: 90.0
+
+# ------------------------------------------------------------------------------
+# PROPULSION
+# Usually electric for quiet operation
+# ------------------------------------------------------------------------------
+propulsion:
+  type: "electric"                   # (REQUIRED)
+  max_thrust_n: 100.0                # (REQUIRED)
+  fuel_capacity_kg: 2.0              # Battery
+
+  num_engines: 1
+  idle_thrust_fraction: 0.10
+
+# ------------------------------------------------------------------------------
+# CONTROL
+# Often flying wing configuration
+# ------------------------------------------------------------------------------
+control:
+  surface_type: "elevon"             # Flying wing common
+
+  aileron_max_deg: 30.0
+  elevator_max_deg: 30.0
+  has_speedbrake: false
+  has_slats: false
+
+# ------------------------------------------------------------------------------
+# INERTIA
+# Small and light
+# ------------------------------------------------------------------------------
+inertia:
+  Ixx: 0.2
+  Iyy: 0.4
+  Izz: 0.5
+
+# ------------------------------------------------------------------------------
+# PAYLOAD
+# The "payload" IS the warhead for loitering munitions
+# ------------------------------------------------------------------------------
+payload:
+  capacity_kg: 5.0                   # Warhead mass
+  hardpoints: 0                      # Internal warhead
+  internal_bay: true
+
+  weapons:
+    # Small gun for engagement before terminal dive
+    - type: "gun"
+      quantity: 1
+      ammo: 100
+      range_m: 150
+      damage: 15
+      cooldown_s: 0.15
+      mass_kg: 1.0
+
+    # The munition itself acts as a high-damage missile on terminal attack
+    - type: "missile_ir"
+      quantity: 1
+      ammo: 1                        # Single use terminal attack
+      range_m: 50                    # Close range / impact
+      damage: 500                    # High damage on impact
+      cooldown_s: 5.0                # One-shot
+      mass_kg: 5.0
+
+# ------------------------------------------------------------------------------
+# SENSORS
+# Target acquisition sensors
+# ------------------------------------------------------------------------------
+sensors:
+  radar_range_km: 0.0                # Usually no radar
+  irst: true                         # IR seeker common
+  rwr: false
+  datalink_range_km: 30.0            # Man-in-loop control
+
+# ------------------------------------------------------------------------------
+# CAPABILITIES
+# ------------------------------------------------------------------------------
+capabilities:
+  carrier_capable: false
+  catapult_launch: true              # Often tube/rail launched
+  arrested_landing: false
+  autonomous: true                   # Autonomous terminal guidance
+  swarm: true                        # Often used in swarms
+  stealth: true                      # Low observability important
+  all_weather: false
+
+notes: |
+  Template for loitering munition / kamikaze drone.
+  Single-use design optimized for target engagement.
+  High terminal g-capability for precision attack.
+
+tags:
+  - loitering_munition
+  - kamikaze
+  - expendable
+  - electric
