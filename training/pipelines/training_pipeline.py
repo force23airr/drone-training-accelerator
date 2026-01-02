@@ -20,7 +20,7 @@ import json
 import shutil
 import hashlib
 import subprocess
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, Any, Optional, List, Tuple, Union
@@ -66,8 +66,11 @@ from simulation.wrappers import (
     ShieldConfig,
     make_shielded_env,
     ActionAdapterConfig,
+    ActionAdapterWrapper,
     make_action_adapted_env,
+    DomainRandomizationWrapper,
 )
+from simulation.randomization import create_curriculum_configs
 
 
 # =============================================================================
@@ -95,7 +98,7 @@ class PipelineConfig:
     bc_batch_size: int = 256
 
     # Action interface (optional high-level control)
-    action_mode: Optional[str] = None  # motor_thrusts, attitude, attitude_rates, velocity
+    action_mode: Optional[str] = None  # separated (alias for velocity), motor_thrusts, attitude, attitude_rates, velocity
     action_adapter_config: Optional[Dict[str, Any]] = None
 
     # RL fine-tuning (optional)
@@ -111,6 +114,12 @@ class PipelineConfig:
     eval_episodes: int = 100
     eval_with_shield: bool = True
     shield_config: Optional[ShieldConfig] = None
+    unsafe_eval: bool = False  # Allow eval without shield (research only)
+
+    # Stress test settings
+    stress_test_enabled: bool = True
+    stress_test_episodes: int = 30
+    stress_test_stages: List[str] = field(default_factory=lambda: ["hard", "extreme"])
 
     # Promotion gates
     min_success_rate: float = 0.9
@@ -156,7 +165,11 @@ class PipelineConfig:
             'rl_timesteps': self.rl_timesteps if self.enable_rl else 0,
             'eval_episodes': self.eval_episodes,
             'eval_with_shield': self.eval_with_shield,
+            'unsafe_eval': self.unsafe_eval,
             'min_success_rate': self.min_success_rate,
+            'stress_test_enabled': self.stress_test_enabled,
+            'stress_test_episodes': self.stress_test_episodes,
+            'stress_test_stages': self.stress_test_stages,
         }
 
 
@@ -228,6 +241,9 @@ class TrainingArtifact:
     # Intervention rates from shield
     intervention_breakdown: Dict[str, float] = field(default_factory=dict)
 
+    # Stress test summaries
+    stress_test_results: Dict[str, Any] = field(default_factory=dict)
+
     # Training info
     config: Optional[PipelineConfig] = None
     training_duration_seconds: float = 0.0
@@ -275,6 +291,7 @@ class TrainingArtifact:
             'safety_event_counts': self.safety_event_counts,
             # Shield intervention rates
             'intervention_breakdown': self.intervention_breakdown,
+            'stress_test_results': self.stress_test_results,
             # Metadata
             'training_duration_seconds': self.training_duration_seconds,
             'created_at': self.created_at,
@@ -362,16 +379,9 @@ def train_from_demonstrations(
         raise ValueError("Must provide either 'env' or 'env_fn'")
 
     # Optional action-space adaptation (high-level control)
-    if config.action_mode:
-        try:
-            mode = ActionMode(config.action_mode)
-        except ValueError:
-            raise ValueError(f"Unknown action_mode '{config.action_mode}'")
-
-        adapter_cfg = ActionAdapterConfig(action_mode=mode, **(config.action_adapter_config or {}))
-        env = make_action_adapted_env(env, adapter_cfg)
-        if verbose:
-            print(f"  Action mode: {mode.value}")
+    resolved_mode = _resolve_action_mode(config.action_mode)
+    if resolved_mode and verbose:
+        print(f"  Action mode: {resolved_mode.value}")
 
     # ==========================================================================
     # PHASE 1: DATA LOADING AND QUALITY FILTERING
@@ -405,7 +415,11 @@ def train_from_demonstrations(
         dataset=dataset,
         config=config,
         output_dir=output_path,
-        action_space=getattr(env, "action_space", None),
+        action_space=_build_env_for_phase(
+            env=env,
+            config=config,
+            apply_shield=False,
+        ).action_space,
         verbose=verbose,
     )
 
@@ -444,6 +458,23 @@ def train_from_demonstrations(
         verbose=verbose,
     )
 
+    stress_results = _run_stress_tests(
+        env=env,
+        env_fn=env_fn,
+        policy=final_policy,
+        config=config,
+        verbose=verbose,
+    )
+
+    if verbose and stress_results:
+        print("\nStress Test Summary")
+        print("-" * 50)
+        for stage, result in stress_results.items():
+            summary = result.get('summary', {})
+            success_rate = summary.get('success_rate', 0.0)
+            episodes = summary.get('num_episodes', 0)
+            print(f"  {stage}: success_rate={success_rate:.2%} over {episodes} episodes")
+
     # ==========================================================================
     # PHASE 5: REPORT GENERATION AND ARTIFACT BUNDLING
     # ==========================================================================
@@ -457,6 +488,7 @@ def train_from_demonstrations(
         eval_env=eval_env,
         fingerprint=fingerprint,
         bc_history=bc_history,
+        stress_test_results=stress_results,
         config=config,
         start_time=start_time,
         verbose=verbose,
@@ -623,12 +655,15 @@ def _train_rl(
             print(f"  Algorithm: {config.rl_algorithm}")
             print(f"  Timesteps: {config.rl_timesteps}")
 
-        train_env = env
-        if config.train_with_shield:
+        train_env = _build_env_for_phase(
+            env=env,
+            config=config,
+            apply_shield=config.train_with_shield,
+            shield_config=config.train_shield_config,
+        )
+        if verbose and config.train_with_shield:
             shield_cfg = config.train_shield_config or config.shield_config or ShieldConfig(apply_penalties=False)
-            train_env = make_shielded_env(env, shield_cfg)
-            if verbose:
-                print(f"  Training shield: ON (penalties={shield_cfg.apply_penalties})")
+            print(f"  Training shield: ON (penalties={shield_cfg.apply_penalties})")
 
         # Create model
         model = algo_class(
@@ -660,6 +695,71 @@ def _train_rl(
         return None
 
 
+def _resolve_action_mode(action_mode: Optional[str]) -> Optional[ActionMode]:
+    """Resolve action mode with aliases."""
+    if not action_mode:
+        return None
+    if isinstance(action_mode, ActionMode):
+        return action_mode
+
+    mode = action_mode.lower().strip()
+    if mode == "separated":
+        return ActionMode.VELOCITY
+    return ActionMode(mode)
+
+
+def _has_wrapper(env, wrapper_cls) -> bool:
+    """Check if an environment is wrapped by a specific wrapper class."""
+    current = env
+    while True:
+        if isinstance(current, wrapper_cls):
+            return True
+        if hasattr(current, 'env'):
+            current = current.env
+        else:
+            break
+    return False
+
+
+def _build_env_for_phase(
+    env,
+    config: PipelineConfig,
+    apply_shield: bool,
+    shield_config: Optional[ShieldConfig] = None,
+    add_randomization: bool = False,
+    randomization_config: Optional[Any] = None,
+):
+    """
+    Build wrapped environment with consistent wrapper ordering:
+    base -> domain randomization -> action adapter -> safety shield
+    """
+    wrapped_env = env
+
+    if add_randomization and not _has_wrapper(wrapped_env, DomainRandomizationWrapper):
+        wrapped_env = DomainRandomizationWrapper(
+            wrapped_env,
+            config=randomization_config,
+        )
+
+    action_mode = _resolve_action_mode(config.action_mode)
+    if action_mode and not _has_wrapper(wrapped_env, ActionAdapterWrapper):
+        adapter_kwargs = dict(config.action_adapter_config or {})
+        adapter_kwargs.pop("action_mode", None)
+        adapter_cfg = ActionAdapterConfig(
+            action_mode=action_mode,
+            **adapter_kwargs
+        )
+        wrapped_env = make_action_adapted_env(wrapped_env, adapter_cfg)
+
+    if apply_shield and not _has_wrapper(wrapped_env, SafetyShieldWrapper):
+        base_cfg = shield_config or config.shield_config or ShieldConfig(apply_penalties=False)
+        if action_mode and base_cfg.action_mode is None:
+            base_cfg = replace(base_cfg, action_mode=action_mode)
+        wrapped_env = make_shielded_env(wrapped_env, base_cfg)
+
+    return wrapped_env
+
+
 def _run_evaluation(
     env,
     policy,
@@ -668,13 +768,22 @@ def _run_evaluation(
 ) -> Tuple[EvaluationResult, Any]:
     """Phase 4: Evaluate with shield and promotion gates."""
 
-    # Wrap with shield if enabled
-    eval_env = env
-    if config.eval_with_shield:
+    # Enforce shield in eval unless explicitly unsafe
+    eval_with_shield = config.eval_with_shield or not config.unsafe_eval
+    if not eval_with_shield and verbose:
+        print("  Shield: OFF (unsafe eval enabled)")
+
+    # Wrap with action adapter and shield if enabled
+    eval_env = _build_env_for_phase(
+        env=env,
+        config=config,
+        apply_shield=eval_with_shield,
+        shield_config=config.shield_config,
+    )
+
+    if verbose and eval_with_shield:
         shield_config = config.shield_config or ShieldConfig(apply_penalties=False)
-        eval_env = make_shielded_env(env, shield_config)
-        if verbose:
-            print(f"  Shield: ON (penalties={shield_config.apply_penalties})")
+        print(f"  Shield: ON (penalties={shield_config.apply_penalties})")
 
     # Create promotion gates in optimal order:
     # 1. SafetyGate (cheapest, hard failures kill fast)
@@ -692,7 +801,7 @@ def _run_evaluation(
     )
 
     # 2. Intervention rate gate (if shield is on)
-    if config.eval_with_shield:
+    if eval_with_shield:
         gates.append(
             InterventionRateGate(
                 max_emergency_interventions=0,
@@ -767,12 +876,87 @@ def _run_evaluation(
     return result, eval_env
 
 
+def _run_stress_tests(
+    env,
+    env_fn,
+    policy,
+    config: PipelineConfig,
+    verbose: bool,
+) -> Dict[str, Any]:
+    """Run stress test evaluation with domain randomization."""
+    if not config.stress_test_enabled:
+        return {}
+
+    stage_map = {
+        "easy": 0,
+        "medium": 1,
+        "hard": 2,
+        "extreme": 3,
+    }
+    curriculum = create_curriculum_configs()
+    results: Dict[str, Any] = {}
+
+    for stage in config.stress_test_stages:
+        stage_key = stage.lower().strip()
+        if stage_key not in stage_map:
+            if verbose:
+                print(f"  Stress test: Unknown stage '{stage}', skipping")
+            continue
+
+        stage_idx = stage_map[stage_key]
+        randomization_config = curriculum[stage_idx]
+
+        base_env = env_fn() if env_fn is not None else env
+        stress_env = _build_env_for_phase(
+            env=base_env,
+            config=config,
+            apply_shield=True,
+            shield_config=config.shield_config,
+            add_randomization=True,
+            randomization_config=randomization_config,
+        )
+
+        if verbose:
+            print(f"  Stress test: {stage_key} ({config.stress_test_episodes} episodes)")
+
+        seed_config = SeedConfig(
+            fixed_seeds=[],
+            use_random_seeds=True,
+            n_random_seeds=config.stress_test_episodes,
+        )
+
+        harness = EvaluationHarness(
+            env=stress_env,
+            gates=[],
+            seed_config=seed_config,
+            early_exit_config=EarlyExitConfig(enabled=False),
+        )
+
+        result = harness.evaluate(
+            policy=policy,
+            n_episodes=config.stress_test_episodes,
+            deterministic=True,
+            verbose=verbose,
+        )
+
+        results[stage_key] = {
+            'summary': result.to_dict().get('summary', {}),
+            'metrics': result.metrics,
+        }
+
+        if hasattr(stress_env, "close"):
+            stress_env.close()
+
+    return results
+
+
 def _create_artifact(
     output_dir: Path,
     eval_result: EvaluationResult,
     eval_env,  # The environment used for evaluation (for env_id and wrapper stack)
     fingerprint: Optional[DatasetFingerprint],
     bc_history: Dict[str, Any],
+    stress_test_results: Dict[str, Any],
     config: PipelineConfig,
     start_time: datetime,
     verbose: bool,
@@ -916,6 +1100,7 @@ def _create_artifact(
         safety_event_counts=safety_event_counts,
         # Shield intervention rates
         intervention_breakdown=intervention_breakdown,
+        stress_test_results=stress_test_results,
         # Metadata
         config=config,
         training_duration_seconds=duration,
@@ -1323,6 +1508,7 @@ def load_artifact(artifact_dir: str) -> TrainingArtifact:
         termination_breakdown=data.get('termination_breakdown', {}),
         safety_event_counts=data.get('safety_event_counts', {}),
         intervention_breakdown=data.get('intervention_breakdown', {}),
+        stress_test_results=data.get('stress_test_results', {}),
         training_duration_seconds=data['training_duration_seconds'],
         created_at=data['created_at'],
     )

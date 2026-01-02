@@ -149,6 +149,7 @@ def test_pipeline_with_real_env():
             enable_rl=False,  # BC only for speed
             eval_episodes=10,  # Fewer episodes for faster test
             eval_with_shield=True,  # Test with shield
+            stress_test_enabled=False,
             min_success_rate=0.3,  # Relaxed for synthetic data
             max_crashes=5,  # Allow some crashes
         )

@@ -93,6 +93,7 @@ class ShieldConfig:
 
     # Action interface
     action_mode: Optional[ActionMode] = None  # Auto-detect if None
+    quaternion_format: str = "xyzw"  # "xyzw" (PyBullet) or "wxyz"
 
 
 @dataclass
@@ -623,7 +624,10 @@ class SafetyShieldWrapper(gym.Wrapper):
 
     def _quat_to_rpy(self, q: np.ndarray) -> Tuple[float, float, float]:
         """Convert quaternion to roll, pitch, yaw."""
-        w, x, y, z = q
+        if self.config.quaternion_format.lower() == "wxyz":
+            w, x, y, z = q
+        else:
+            x, y, z, w = q
         roll = np.arctan2(2 * (w * x + y * z), 1 - 2 * (x ** 2 + y ** 2))
         pitch = np.arcsin(np.clip(2 * (w * y - z * x), -1.0, 1.0))
         yaw = np.arctan2(2 * (w * z + x * y), 1 - 2 * (y ** 2 + z ** 2))

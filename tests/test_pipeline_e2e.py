@@ -204,6 +204,8 @@ def test_full_pipeline():
             enable_rl=False,  # BC only for speed
             eval_episodes=20,  # Reduced for testing
             eval_with_shield=False,  # No shield for mock env
+            unsafe_eval=True,
+            stress_test_enabled=False,
             min_success_rate=0.5,  # Relaxed for synthetic data
             max_crashes=2,  # Allow some crashes in mock
             baseline_path=str(baseline_path),
@@ -435,6 +437,8 @@ def test_pipeline_with_failing_gates():
             bc_epochs=3,
             eval_episodes=5,
             eval_with_shield=False,
+            unsafe_eval=True,
+            stress_test_enabled=False,
             min_success_rate=0.95,  # Very strict
             max_crashes=0,  # Zero tolerance
         )

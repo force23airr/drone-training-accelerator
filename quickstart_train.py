@@ -65,7 +65,7 @@ def parse_args():
         "--action-mode",
         type=str,
         default=None,
-        help="Action interface: motor_thrusts, attitude, attitude_rates, velocity"
+        help="Action interface: separated, motor_thrusts, attitude, attitude_rates, velocity"
     )
     return parser.parse_args()
 
@@ -99,7 +99,11 @@ def main():
     )
 
     if args.action_mode:
-        mode = ActionMode(args.action_mode)
+        mode_str = args.action_mode.lower().strip()
+        if mode_str == "separated":
+            mode = ActionMode.VELOCITY
+        else:
+            mode = ActionMode(mode_str)
         env = make_action_adapted_env(env, ActionAdapterConfig(action_mode=mode))
         print(f"Action mode: {mode.value}")
 

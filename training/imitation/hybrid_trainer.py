@@ -82,7 +82,7 @@ class HybridTrainingConfig:
     bc_batch_size: int = 256
 
     # Action interface (optional high-level control)
-    action_mode: Optional[str] = None
+    action_mode: Optional[str] = None  # separated (alias for velocity), motor_thrusts, attitude, attitude_rates, velocity
     action_adapter_config: Optional[Dict[str, Any]] = None
 
     # Phase 3: RL Optimization
@@ -141,10 +141,12 @@ class HybridILRLTrainer:
 
         # Optional action-space adaptation
         if self.config.action_mode:
-            mode = ActionMode(self.config.action_mode)
+            mode = self._resolve_action_mode(self.config.action_mode)
+            adapter_kwargs = dict(self.config.action_adapter_config or {})
+            adapter_kwargs.pop("action_mode", None)
             adapter_cfg = ActionAdapterConfig(
                 action_mode=mode,
-                **(self.config.action_adapter_config or {})
+                **adapter_kwargs
             )
             self.env = make_action_adapted_env(self.env, adapter_cfg)
 
@@ -167,6 +169,14 @@ class HybridILRLTrainer:
             self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         else:
             self.device = torch.device(self.config.device)
+
+    @staticmethod
+    def _resolve_action_mode(action_mode: str) -> ActionMode:
+        """Resolve action mode with aliases."""
+        mode = action_mode.lower().strip()
+        if mode == "separated":
+            return ActionMode.VELOCITY
+        return ActionMode(mode)
 
     def ingest_data(
         self,

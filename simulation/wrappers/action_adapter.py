@@ -20,6 +20,7 @@ from simulation.control import CascadedDroneController, ActionMode
 class ActionAdapterConfig:
     """Configuration for action-space adaptation."""
     action_mode: ActionMode = ActionMode.MOTOR_THRUSTS
+    quaternion_format: str = "xyzw"  # "xyzw" (PyBullet) or "wxyz"
 
     # Limits for normalized action mapping
     max_tilt_deg: float = 35.0
@@ -63,6 +64,7 @@ class ActionAdapterWrapper(gym.Wrapper):
         super().__init__(env)
         self.config = config or ActionAdapterConfig()
         self.action_mode = self.config.action_mode
+        self.is_action_adapter = True
         self._state_extractor = state_extractor or self._default_state_extractor
         self._last_obs: Optional[np.ndarray] = None
 
@@ -245,7 +247,10 @@ class ActionAdapterWrapper(gym.Wrapper):
         return np.concatenate([position, velocity, [roll, pitch, yaw], ang_vel])
 
     def _quat_to_rpy(self, q: np.ndarray) -> Tuple[float, float, float]:
-        w, x, y, z = q
+        if self.config.quaternion_format.lower() == "wxyz":
+            w, x, y, z = q
+        else:
+            x, y, z, w = q
         roll = np.arctan2(2 * (w * x + y * z), 1 - 2 * (x ** 2 + y ** 2))
         pitch = np.arcsin(np.clip(2 * (w * y - z * x), -1.0, 1.0))
         yaw = np.arctan2(2 * (w * z + x * y), 1 - 2 * (y ** 2 + z ** 2))
