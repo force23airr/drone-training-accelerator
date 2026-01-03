@@ -68,6 +68,9 @@ from simulation.wrappers import (
     ActionAdapterConfig,
     ActionAdapterWrapper,
     make_action_adapted_env,
+    ObservationAdapterConfig,
+    ObservationAdapterWrapper,
+    make_observation_adapted_env,
     DomainRandomizationWrapper,
 )
 from simulation.randomization import create_curriculum_configs
@@ -100,6 +103,10 @@ class PipelineConfig:
     # Action interface (optional high-level control)
     action_mode: Optional[str] = None  # separated (alias for velocity), motor_thrusts, attitude, attitude_rates, velocity
     action_adapter_config: Optional[Dict[str, Any]] = None
+
+    # Observation schema (optional canonicalization)
+    use_canonical_observations: bool = False
+    observation_adapter_config: Optional[Dict[str, Any]] = None
 
     # RL fine-tuning (optional)
     enable_rl: bool = True
@@ -160,6 +167,7 @@ class PipelineConfig:
             'bc_hidden_sizes': self.bc_hidden_sizes,
             'bc_learning_rate': self.bc_learning_rate,
             'action_mode': self.action_mode,
+            'use_canonical_observations': self.use_canonical_observations,
             'train_with_shield': self.train_with_shield,
             'rl_algorithm': self.rl_algorithm if self.enable_rl else None,
             'rl_timesteps': self.rl_timesteps if self.enable_rl else 0,
@@ -731,7 +739,7 @@ def _build_env_for_phase(
 ):
     """
     Build wrapped environment with consistent wrapper ordering:
-    base -> domain randomization -> action adapter -> safety shield
+    base -> domain randomization -> action adapter -> safety shield -> observation adapter
     """
     wrapped_env = env
 
@@ -756,6 +764,12 @@ def _build_env_for_phase(
         if action_mode and base_cfg.action_mode is None:
             base_cfg = replace(base_cfg, action_mode=action_mode)
         wrapped_env = make_shielded_env(wrapped_env, base_cfg)
+
+    if config.use_canonical_observations and not _has_wrapper(wrapped_env, ObservationAdapterWrapper):
+        adapter_cfg = ObservationAdapterConfig(
+            **(config.observation_adapter_config or {})
+        )
+        wrapped_env = make_observation_adapted_env(wrapped_env, adapter_cfg)
 
     return wrapped_env
 

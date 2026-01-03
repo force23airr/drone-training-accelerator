@@ -82,6 +82,9 @@ from simulation.wrappers import (
     ActionAdapterConfig,
     ActionAdapterWrapper,
     make_action_adapted_env,
+    ObservationAdapterConfig,
+    ObservationAdapterWrapper,
+    make_observation_adapted_env,
 )
 
 # Integrated environment (requires gym-pybullet-drones)
@@ -156,6 +159,10 @@ __all__ = [
     "ActionAdapterConfig",
     "ActionAdapterWrapper",
     "make_action_adapted_env",
+    # Observation adapter
+    "ObservationAdapterConfig",
+    "ObservationAdapterWrapper",
+    "make_observation_adapted_env",
     # Availability flags
     "INTEGRATED_ENV_AVAILABLE",
     "PX4_SITL_AVAILABLE",

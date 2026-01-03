@@ -241,31 +241,38 @@ class DomainRandomizationWrapper(gym.Wrapper):
         obs = np.array(obs, dtype=np.float32)
 
         # Assume observation structure:
-        # [position(3), velocity(3), orientation(4), angular_velocity(3), ...]
-        # This is a common structure but may need adaptation
+        # - Legacy: [position(3), velocity(3), orientation(4), angular_velocity(3), ...]
+        # - Canonical: [position(3), velocity(3), rpy(3), angular_velocity(3), ...]
+        if len(obs) >= 21:
+            pos_slice = slice(0, 3)
+            vel_slice = slice(3, 6)
+            ang_slice = slice(9, 12)
+        elif len(obs) >= 13:
+            pos_slice = slice(0, 3)
+            vel_slice = slice(3, 6)
+            ang_slice = slice(10, 13)
+        else:
+            return obs
 
-        if len(obs) >= 13:
-            # Apply GPS noise to position (indices 0-2)
-            gps_noise = np.random.randn(3) * 0.1 * params.gps_noise_scale
+        # Apply GPS noise to position
+        gps_noise = np.random.randn(3) * 0.1 * params.gps_noise_scale
 
-            # Simulate GPS dropout
-            if np.random.rand() < params.gps_dropout_prob:
-                # Hold last position (simulate dropout)
-                if len(self._obs_buffer) > 0:
-                    obs[0:3] = self._obs_buffer[-1][0:3]
-            else:
-                obs[0:3] = obs[0:3] + gps_noise
+        # Simulate GPS dropout
+        if np.random.rand() < params.gps_dropout_prob:
+            # Hold last position (simulate dropout)
+            if len(self._obs_buffer) > 0:
+                obs[pos_slice] = self._obs_buffer[-1][pos_slice]
+        else:
+            obs[pos_slice] = obs[pos_slice] + gps_noise
 
-            # Apply IMU noise to velocity (indices 3-5)
-            accel_noise = params.imu_accel_bias + np.random.randn(3) * 0.1 * params.imu_noise_scale
-            # Velocity is affected by accelerometer bias integration
-            obs[3:6] = obs[3:6] + accel_noise * getattr(self.env, 'dt', 0.01)
+        # Apply IMU noise to velocity
+        accel_noise = params.imu_accel_bias + np.random.randn(3) * 0.1 * params.imu_noise_scale
+        obs[vel_slice] = obs[vel_slice] + accel_noise * getattr(self.env, 'dt', 0.01)
 
-            # Apply gyro bias to angular velocity (indices 10-12 for quaternion+angular_vel)
-            if len(obs) >= 13:
-                obs[10:13] = obs[10:13] + params.imu_gyro_bias
-                gyro_noise = np.random.randn(3) * 0.01 * params.imu_noise_scale
-                obs[10:13] = obs[10:13] + gyro_noise
+        # Apply gyro bias to angular velocity
+        obs[ang_slice] = obs[ang_slice] + params.imu_gyro_bias
+        gyro_noise = np.random.randn(3) * 0.01 * params.imu_noise_scale
+        obs[ang_slice] = obs[ang_slice] + gyro_noise
 
         return obs
 

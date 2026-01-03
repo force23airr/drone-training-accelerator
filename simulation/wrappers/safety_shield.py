@@ -643,22 +643,39 @@ class SafetyShieldWrapper(gym.Wrapper):
         Assumes format: [position(3), velocity(3), orientation(4), angular_velocity(3), ...]
         Override this for different observation formats.
         """
+        obs = np.array(obs, dtype=np.float32).flatten()
+
+        if len(obs) >= 21:
+            # Canonical schema: [pos(3), vel(3), rpy(3), ang_vel(3), ...]
+            position = obs[0:3]
+            velocity = obs[3:6]
+            orientation = obs[6:9]  # Euler
+            angular_vel = obs[9:12]
+            return position, velocity, orientation, angular_vel
+
         if len(obs) >= 13:
             position = obs[0:3]
             velocity = obs[3:6]
-            orientation = obs[6:10]  # Quaternion
-            angular_vel = obs[10:13]
-        else:
-            # Fallback for shorter observations
-            position = np.zeros(3)
-            velocity = np.zeros(3)
-            orientation = np.array([1, 0, 0, 0])  # Identity quaternion
-            angular_vel = np.zeros(3)
+            orientation_candidate = obs[6:10]
+            quat_norm = np.linalg.norm(orientation_candidate)
+            if 0.5 < quat_norm < 1.5:
+                orientation = orientation_candidate  # Quaternion
+                angular_vel = obs[10:13]
+            else:
+                orientation = obs[6:9]  # Euler fallback
+                angular_vel = obs[9:12] if len(obs) >= 12 else np.zeros(3)
+            return position, velocity, orientation, angular_vel
 
-            if len(obs) >= 3:
-                position = obs[0:3]
-            if len(obs) >= 6:
-                velocity = obs[3:6]
+        # Fallback for shorter observations
+        position = np.zeros(3)
+        velocity = np.zeros(3)
+        orientation = np.array([1, 0, 0, 0])  # Identity quaternion
+        angular_vel = np.zeros(3)
+
+        if len(obs) >= 3:
+            position = obs[0:3]
+        if len(obs) >= 6:
+            velocity = obs[3:6]
 
         return position, velocity, orientation, angular_vel
 

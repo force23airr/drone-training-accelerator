@@ -35,6 +35,10 @@ from training.imitation.demonstration import (
     DemonstrationStep,
     DemonstrationDataset,
 )
+from simulation.observation_schema import (
+    build_canonical_observation,
+    DEFAULT_SPEED_OF_SOUND_M_S,
+)
 
 
 @dataclass
@@ -114,6 +118,8 @@ class ExtractionConfig:
 
     # Output
     output_coordinate_frame: str = "ned"  # ned, enu, camera
+    observation_schema: str = "canonical"  # canonical, legacy
+    speed_of_sound_m_s: float = DEFAULT_SPEED_OF_SOUND_M_S
 
 
 class VideoTrajectoryExtractor:
@@ -619,12 +625,31 @@ class VideoTrajectoryExtractor:
         obs_builder = observation_builder or default_obs_builder
         act_builder = action_builder or default_action_builder
 
+        schema = (self.config.observation_schema or "legacy").lower()
+        use_canonical = schema == "canonical" and observation_builder is None
+
+        def build_canonical_obs(pose: ExtractedPose, next_pose: ExtractedPose) -> np.ndarray:
+            dt = next_pose.timestamp - pose.timestamp
+            angular_vel = None
+            if dt > 0:
+                angular_vel = (next_pose.euler_angles - pose.euler_angles) / dt
+            return build_canonical_observation(
+                position=pose.position,
+                velocity=pose.velocity,
+                attitude=pose.euler_angles,
+                angular_velocity=angular_vel,
+                speed_of_sound_m_s=self.config.speed_of_sound_m_s,
+            )
+
         # Build demonstration steps
         for i in range(len(self.extracted_poses) - 1):
             pose = self.extracted_poses[i]
             next_pose = self.extracted_poses[i + 1]
 
-            observation = obs_builder(pose)
+            if use_canonical:
+                observation = build_canonical_obs(pose, next_pose)
+            else:
+                observation = obs_builder(pose)
             action = act_builder(pose, next_pose)
 
             step = DemonstrationStep(
@@ -688,6 +713,7 @@ def extract_from_flight_log(
     log_path: str,
     log_format: str = "px4",
     output_path: Optional[str] = None,
+    observation_schema: str = "canonical",
 ) -> Demonstration:
     """
     Extract demonstration from flight controller logs.
@@ -712,13 +738,13 @@ def extract_from_flight_log(
     )
 
     if log_format == "px4":
-        demo = _parse_px4_ulog(log_path)
+        demo = _parse_px4_ulog(log_path, observation_schema=observation_schema)
     elif log_format == "ardupilot":
         demo = _parse_ardupilot_log(log_path)
     elif log_format == "betaflight":
-        demo = _parse_betaflight_blackbox(log_path)
+        demo = _parse_betaflight_blackbox(log_path, observation_schema=observation_schema)
     elif log_format == "csv":
-        demo = _parse_csv_log(log_path)
+        demo = _parse_csv_log(log_path, observation_schema=observation_schema)
     else:
         raise ValueError(f"Unsupported log format: {log_format}")
 
@@ -728,7 +754,7 @@ def extract_from_flight_log(
     return demo
 
 
-def _parse_px4_ulog(log_path: str) -> Demonstration:
+def _parse_px4_ulog(log_path: str, observation_schema: str = "canonical") -> Demonstration:
     """Parse PX4 ULog format."""
     try:
         from pyulog import ULog
@@ -766,12 +792,31 @@ def _parse_px4_ulog(log_path: str) -> Demonstration:
             # Build demonstration steps
             n_samples = min(len(timestamps), len(roll))
 
+            use_canonical = (observation_schema or "legacy").lower() == "canonical"
+
             for i in range(n_samples - 1):
-                observation = np.array([
-                    x[i], y[i], z[i],
-                    vx[i], vy[i], vz[i],
-                    roll[i], pitch[i], yaw[i],
-                ])
+                if use_canonical:
+                    angular_vel = None
+                    dt = timestamps[i + 1] - timestamps[i]
+                    if dt > 0:
+                        angular_vel = np.array([
+                            (roll[i + 1] - roll[i]) / dt,
+                            (pitch[i + 1] - pitch[i]) / dt,
+                            (yaw[i + 1] - yaw[i]) / dt,
+                        ], dtype=np.float32)
+
+                    observation = build_canonical_observation(
+                        position=[x[i], y[i], z[i]],
+                        velocity=[vx[i], vy[i], vz[i]],
+                        attitude=[roll[i], pitch[i], yaw[i]],
+                        angular_velocity=angular_vel,
+                    )
+                else:
+                    observation = np.array([
+                        x[i], y[i], z[i],
+                        vx[i], vy[i], vz[i],
+                        roll[i], pitch[i], yaw[i],
+                    ])
 
                 # Action: motor outputs (normalized)
                 if i < len(outputs):
@@ -812,7 +857,7 @@ def _parse_ardupilot_log(log_path: str) -> Demonstration:
     return demo
 
 
-def _parse_betaflight_blackbox(log_path: str) -> Demonstration:
+def _parse_betaflight_blackbox(log_path: str, observation_schema: str = "canonical") -> Demonstration:
     """Parse Betaflight blackbox log."""
     demo = Demonstration(
         source="betaflight_blackbox",
@@ -825,17 +870,32 @@ def _parse_betaflight_blackbox(log_path: str) -> Demonstration:
             import csv
             reader = csv.DictReader(f)
 
+            use_canonical = (observation_schema or "legacy").lower() == "canonical"
+
             for i, row in enumerate(reader):
                 try:
                     # Common Betaflight blackbox fields
-                    observation = np.array([
+                    gyro = np.array([
                         float(row.get('gyroADC[0]', 0)) / 1000.0,
                         float(row.get('gyroADC[1]', 0)) / 1000.0,
                         float(row.get('gyroADC[2]', 0)) / 1000.0,
+                    ], dtype=np.float32)
+
+                    acc = np.array([
                         float(row.get('accSmooth[0]', 0)) / 1000.0,
                         float(row.get('accSmooth[1]', 0)) / 1000.0,
                         float(row.get('accSmooth[2]', 0)) / 1000.0,
-                    ])
+                    ], dtype=np.float32)
+
+                    if use_canonical:
+                        observation = build_canonical_observation(
+                            position=None,
+                            velocity=None,
+                            attitude=None,
+                            angular_velocity=gyro,
+                        )
+                    else:
+                        observation = np.concatenate([gyro, acc])
 
                     # RC commands as actions
                     action = np.array([
@@ -864,7 +924,7 @@ def _parse_betaflight_blackbox(log_path: str) -> Demonstration:
     return demo
 
 
-def _parse_csv_log(log_path: str) -> Demonstration:
+def _parse_csv_log(log_path: str, observation_schema: str = "canonical") -> Demonstration:
     """Parse generic CSV flight log."""
     demo = Demonstration(
         source="csv_telemetry",
@@ -875,6 +935,8 @@ def _parse_csv_log(log_path: str) -> Demonstration:
 
         with open(log_path, 'r') as f:
             reader = csv.DictReader(f)
+
+            use_canonical = (observation_schema or "legacy").lower() == "canonical"
 
             for i, row in enumerate(reader):
                 # Try to extract common fields
@@ -894,7 +956,14 @@ def _parse_csv_log(log_path: str) -> Demonstration:
                     pitch = float(row.get('pitch', row.get('theta', 0)))
                     yaw = float(row.get('yaw', row.get('psi', 0)))
 
-                    observation = np.array([x, y, z, vx, vy, vz, roll, pitch, yaw])
+                    if use_canonical:
+                        observation = build_canonical_observation(
+                            position=[x, y, z],
+                            velocity=[vx, vy, vz],
+                            attitude=[roll, pitch, yaw],
+                        )
+                    else:
+                        observation = np.array([x, y, z, vx, vy, vz, roll, pitch, yaw])
 
                     # Actions (control inputs)
                     thrust = float(row.get('thrust', row.get('throttle', 0.5)))

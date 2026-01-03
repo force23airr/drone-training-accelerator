@@ -23,6 +23,11 @@ from simulation.wrappers.action_adapter import (
     ActionAdapterWrapper,
     make_action_adapted_env,
 )
+from simulation.wrappers.observation_adapter import (
+    ObservationAdapterConfig,
+    ObservationAdapterWrapper,
+    make_observation_adapted_env,
+)
 
 __all__ = [
     # Domain randomization
@@ -40,4 +45,8 @@ __all__ = [
     "ActionAdapterConfig",
     "ActionAdapterWrapper",
     "make_action_adapted_env",
+    # Observation adapter
+    "ObservationAdapterConfig",
+    "ObservationAdapterWrapper",
+    "make_observation_adapted_env",
 ]

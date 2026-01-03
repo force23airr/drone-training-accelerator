@@ -85,6 +85,11 @@ class HybridTrainingConfig:
     action_mode: Optional[str] = None  # separated (alias for velocity), motor_thrusts, attitude, attitude_rates, velocity
     action_adapter_config: Optional[Dict[str, Any]] = None
 
+    # Observation schema (for cross-platform training)
+    observation_schema: str = "canonical"  # canonical, legacy
+    use_canonical_observations: bool = True
+    observation_adapter_config: Optional[Dict[str, Any]] = None
+
     # Phase 3: RL Optimization
     rl_algorithm: str = "PPO"  # PPO, SAC, TD3
     rl_timesteps: int = 500000
@@ -178,6 +183,42 @@ class HybridILRLTrainer:
             return ActionMode.VELOCITY
         return ActionMode(mode)
 
+    @staticmethod
+    def _has_wrapper(env, wrapper_cls) -> bool:
+        """Check if an environment is wrapped by a specific wrapper class."""
+        current = env
+        while True:
+            if isinstance(current, wrapper_cls):
+                return True
+            if hasattr(current, 'env'):
+                current = current.env
+            else:
+                break
+        return False
+
+    def _wrap_env_for_policy(
+        self,
+        env,
+        apply_shield: bool = False,
+    ):
+        """Apply shield (optional) and canonical observation adapter (optional)."""
+        wrapped_env = env
+
+        if apply_shield:
+            shield_cfg = self.config.shield_config or ShieldConfig(apply_penalties=False)
+            wrapped_env = make_shielded_env(wrapped_env, shield_cfg)
+
+        if self.config.use_canonical_observations:
+            from simulation.wrappers import ObservationAdapterWrapper, ObservationAdapterConfig
+
+            if not self._has_wrapper(wrapped_env, ObservationAdapterWrapper):
+                adapter_cfg = ObservationAdapterConfig(
+                    **(self.config.observation_adapter_config or {})
+                )
+                wrapped_env = ObservationAdapterWrapper(wrapped_env, adapter_cfg)
+
+        return wrapped_env
+
     def ingest_data(
         self,
         sources: List[str],
@@ -232,8 +273,9 @@ class HybridILRLTrainer:
 
                 elif source_path.suffix in ['.mp4', '.avi', '.mov']:
                     # Extract from video
-                    from training.imitation.video_extractor import extract_from_video
-                    demo = extract_from_video(str(source_path))
+                    from training.imitation.video_extractor import extract_from_video, ExtractionConfig
+                    extract_cfg = ExtractionConfig(observation_schema=self.config.observation_schema)
+                    demo = extract_from_video(str(source_path), config=extract_cfg)
                     all_demos.append(demo)
                     if self.config.verbose:
                         print(f"  Extracted demo from video {source}")
@@ -244,7 +286,8 @@ class HybridILRLTrainer:
                     log_format = {'.ulg': 'px4', '.log': 'ardupilot', '.csv': 'csv'}
                     demo = extract_from_flight_log(
                         str(source_path),
-                        log_format=log_format.get(source_path.suffix, 'csv')
+                        log_format=log_format.get(source_path.suffix, 'csv'),
+                        observation_schema=self.config.observation_schema,
                     )
                     all_demos.append(demo)
                     if self.config.verbose:
@@ -393,10 +436,10 @@ class HybridILRLTrainer:
             self.phase_results.append(result)
             return result
 
-        gail_env = self.env
-        if self.config.train_with_shield:
-            shield_cfg = self.config.shield_config or ShieldConfig(apply_penalties=False)
-            gail_env = make_shielded_env(self.env, shield_cfg)
+        gail_env = self._wrap_env_for_policy(
+            self.env,
+            apply_shield=self.config.train_with_shield,
+        )
             if self.config.verbose:
                 print(f"  Training shield: ON (penalties={shield_cfg.apply_penalties})")
 
@@ -474,12 +517,14 @@ class HybridILRLTrainer:
 
             algo_class = algorithms.get(self.config.rl_algorithm, PPO)
 
-            train_env = self.env
-            if self.config.train_with_shield:
+            if self.config.train_with_shield and self.config.verbose:
                 shield_cfg = self.config.shield_config or ShieldConfig(apply_penalties=False)
-                train_env = make_shielded_env(self.env, shield_cfg)
-                if self.config.verbose:
-                    print(f"  Training shield: ON (penalties={shield_cfg.apply_penalties})")
+                print(f"  Training shield: ON (penalties={shield_cfg.apply_penalties})")
+
+            train_env = self._wrap_env_for_policy(
+                self.env,
+                apply_shield=self.config.train_with_shield,
+            )
 
             # Create model
             self.rl_model = algo_class(
@@ -572,15 +617,16 @@ class HybridILRLTrainer:
     ) -> float:
         """Evaluate policy over multiple episodes."""
         rewards = []
+        eval_env = self._wrap_env_for_policy(self.env, apply_shield=False)
 
         for _ in range(n_episodes):
-            obs, _ = self.env.reset()
+            obs, _ = eval_env.reset()
             episode_reward = 0
             done = False
 
             while not done:
                 action, _ = policy.predict(obs, deterministic=True)
-                obs, reward, terminated, truncated, _ = self.env.step(action)
+                obs, reward, terminated, truncated, _ = eval_env.step(action)
                 episode_reward += reward
                 done = terminated or truncated
 
